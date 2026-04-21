@@ -1,0 +1,265 @@
+// matrix.rs — Port of matrix.c packed symmetric storage linear algebra
+// All symmetric matrices use packed lower-triangular storage:
+// index(i,j) = i*(i+1)/2 + j for j <= i
+
+const MAXCOV: usize = 30;
+
+/// Compute inverse of a lower triangular matrix (packed storage)
+pub fn triinv(x: &[f64], y: &mut [f64], work: &mut [f64], n: usize) {
+    for i in (0..n).rev() {
+        for j in 0..i {
+            work[j] = 0.0;
+        }
+        work[i] = 1.0;
+        // ubak with aliased work as both z and y - use temp
+        let mut temp = vec![0.0f64; i + 1];
+        temp[..=i].copy_from_slice(&work[..=i]);
+        ubak(x, work, &temp, 1, i + 1);
+        let k = i * (i + 1) / 2;
+        for j in 0..=i {
+            y[k + j] = work[j];
+        }
+    }
+}
+
+/// Triangular matrix times its transpose (packed storage)
+pub fn trimult(y: &[f64], z: &mut [f64], n: usize) {
+    for i in 0..n {
+        for j in i..n {
+            let k = j * (j + 1) / 2 + i;
+            let mut m2 = j * (j + 1) / 2 + j;
+            z[k] = y[k] * y[m2];
+            let mut k2 = k;
+            for l in (j + 1)..n {
+                k2 += l;
+                m2 += l;
+                z[k] += y[k2] * y[m2];
+            }
+        }
+    }
+}
+
+/// Cholesky decomposition of symmetric positive definite matrix
+/// s: input (packed), t: output (packed), n: dimension
+/// Returns 0 on success, 1 if not positive definite
+pub fn chol(s: &[f64], t: &mut [f64], n: usize) -> i32 {
+    let mut ii: i64 = -1;
+    for i in 0..n {
+        let inc = i + 1;
+        let i0 = (ii + 1) as usize;
+        ii += inc as i64;
+        let ii_u = ii as usize;
+        let mut t1 = s[ii_u];
+        for ik in i0..ii_u {
+            t1 -= t[ik] * t[ik];
+        }
+        if t1 <= 0.0 {
+            return 1;
+        }
+        t1 = t1.sqrt();
+        t[ii_u] = t1;
+        let mut ji = ii_u;
+        let mut inc2 = inc;
+        for _j in (i + 1)..n {
+            ji += inc2;
+            inc2 += 1;
+            let jk_start = ji - i;
+            let mut ik = i0;
+            let mut t2 = s[ji];
+            for _k in 0..i {
+                t2 -= t[ik] * t[jk_start + _k];
+                ik += 1;
+            }
+            t[ji] = t2 / t1;
+        }
+    }
+    0
+}
+
+/// Modified Cholesky decomposition
+/// s: input (packed), t: output (packed), d: diagonal output, n: dimension
+/// Returns 0 if no modification needed, 1 if modified
+pub fn cholmod(s: &[f64], t: &mut [f64], d: &mut [f64], n: usize) -> i32 {
+    const MACHEPS: f64 = 3.0e-39;
+    let mut retval = 0i32;
+
+    // Compute psi and bup
+    let mut j = 0usize;
+    let mut psi = 0.0f64;
+    let mut bup = 0.0f64;
+    let mut t2_max = 0.0f64;
+    for i in 0..n {
+        for _ii in 0..i {
+            psi += 2.0 * s[j] * s[j];
+            let t1 = s[j].abs();
+            j += 1;
+            bup = bup.max(t1);
+        }
+        let t1 = s[j].abs();
+        t2_max = t2_max.max(t1);
+        psi += s[j] * s[j];
+        j += 1;
+    }
+    psi = psi.sqrt();
+    psi = if psi > 1.0 { psi * MACHEPS } else { MACHEPS };
+    bup /= n as f64;
+    bup = bup.max(t2_max).max(MACHEPS);
+
+    let mut ii: i64 = -1;
+    for i in 0..n {
+        let i0 = (ii + 1) as usize;
+        ii += (i + 1) as i64;
+        let ii_u = ii as usize;
+        let mut t1 = s[ii_u];
+        for ik in i0..ii_u {
+            t1 -= t[ik] * t[ik] * d[ik - i0];
+        }
+        if t1 <= 0.0 {
+            t1 = -t1;
+            retval = 1;
+        }
+        if t1 < psi {
+            t1 = psi;
+            retval = 1;
+        }
+        let mut ji = ii_u;
+        let mut tj = 0.0f64;
+        for j2 in (i + 1)..n {
+            ji += j2;
+            let jk_start = ji - i;
+            let mut ik = i0;
+            let mut t2 = s[ji];
+            for k in 0..i {
+                t2 -= t[ik] * t[jk_start + k] * d[k];
+                ik += 1;
+            }
+            t[ji] = t2;
+            tj = tj.max(t2.abs());
+        }
+        let tem = tj * tj / bup;
+        if t1 < tem {
+            t1 = tem;
+            retval = 1;
+        }
+        d[i] = t1;
+        t[ii_u] = 1.0;
+        let mut ji2 = ii_u;
+        for j2 in (i + 1)..n {
+            ji2 += j2;
+            t[ji2] /= t1;
+        }
+    }
+    retval
+}
+
+/// Solve upper triangular system: T * z = y
+pub fn ubak(t: &[f64], z: &mut [f64], y: &[f64], m: usize, n: usize) -> i32 {
+    // Note: z and y may alias (same slice). We handle this by reading y before writing z.
+    let mut iy = n * m - 1;
+    let mut it2 = n * (n + 1) / 2;
+    for _i1 in 0..n {
+        it2 -= 1;
+        for _i2 in 0..m {
+            let mut tem = y[iy];
+            let mut it = it2;
+            let mut iz = n * m - 1 - _i2;
+            for _i3 in 0.._i1 {
+                tem -= z[iz] * t[it];
+                iz -= m;
+                it -= (n - _i3 - 1);
+            }
+            if tem != 0.0 && t[it] == 0.0 {
+                return 1;
+            }
+            z[iy] = tem / t[it];
+            if iy == 0 { return 0; }
+            iy -= 1;
+        }
+    }
+    0
+}
+
+/// Solve lower triangular system: T * z = y
+pub fn lbak(t: &[f64], z: &mut [f64], y: &[f64], m: usize, n: usize) -> i32 {
+    let mut iy = 0usize;
+    for i1 in 0..n {
+        for i2 in 0..m {
+            let mut tem = y[iy];
+            let mut it = (i1 + 1) * i1 / 2;
+            let mut iz = i2;
+            for _i3 in 0..i1 {
+                tem -= z[iz] * t[it];
+                iz += m;
+                it += 1;
+            }
+            if tem != 0.0 && t[it] == 0.0 {
+                return 1;
+            }
+            z[iy] = tem / t[it];
+            iy += 1;
+        }
+    }
+    0
+}
+
+/// Inverse of symmetric positive definite matrix
+pub fn spdinv(t: &[f64], y: &mut [f64], n: usize) -> i32 {
+    let mut z1 = [0.0f64; MAXCOV];
+    if chol(t, y, n) == 1 {
+        return 1;
+    }
+    let size = n * (n + 1) / 2;
+    let mut temp = vec![0.0f64; size];
+    temp[..size].copy_from_slice(&y[..size]);
+    triinv(&temp, y, &mut z1, n);
+    temp[..size].copy_from_slice(&y[..size]);
+    trimult(&temp, y, n);
+    0
+}
+
+/// Multiply symmetric matrix by rectangular matrix: z = x * y
+/// x: symmetric (m x m, packed), y: rectangular (m x n), z: output (m x n)
+pub fn symmult(x: &[f64], y: &[f64], z: &mut [f64], m: usize, n: usize) {
+    let mut l = 0usize;
+    for i in 0..m {
+        let item = i * (i + 1) / 2;
+        for j in 0..n {
+            z[l] = 0.0;
+            let mut ii2 = item;
+            let mut jj = j;
+            for _k in 0..i {
+                z[l] += x[ii2] * y[jj];
+                ii2 += 1;
+                jj += n;
+            }
+            let ij = m - i;
+            let mut it = i + 1;
+            for _k in 0..ij {
+                z[l] += x[ii2] * y[jj];
+                jj += n;
+                ii2 += it;
+                it += 1;
+            }
+            l += 1;
+        }
+    }
+}
+
+/// Multiply two rectangular matrices: z = x * y
+/// x: (k x m), y: (m x n), z: (k x n)
+pub fn mmult1(x: &[f64], y: &[f64], z: &mut [f64], k: usize, m: usize, n: usize) {
+    let mut i = 0usize;
+    for kk in 0..k {
+        for nn in 0..n {
+            z[i] = 0.0;
+            let mut l = nn;
+            let mut j2 = kk * m;
+            for _mm in 0..m {
+                z[i] += x[j2] * y[l];
+                j2 += 1;
+                l += n;
+            }
+            i += 1;
+        }
+    }
+}

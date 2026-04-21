@@ -1,0 +1,322 @@
+---
+title: "Reproducing Anderson (1991): A Nonproportional Hazards Weibull AFT Model"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Reproducing Anderson (1991): A Nonproportional Hazards Weibull AFT Model}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+# Load pre-computed summary results (sanitized; no raw data/model objects)
+anderson_results <- readRDS(
+  system.file("extdata", "anderson1991_results.rds", package = "vldaft"))
+info <- anderson_results$info
+summaries <- anderson_results$summaries
+checks <- anderson_results$checks
+prediction <- anderson_results$prediction
+```
+
+## Introduction
+
+Anderson (1991) introduced the varying location and dispersion accelerated
+failure time (VLDAFT) model, in which both the location $\mu$ and the
+dispersion $\sigma$ of a log-linear survival model can depend on covariates
+and on each other. This vignette reproduces the results from the original
+Biometrics paper using the `vldaft` package.
+This is done both with the original C routines to compute the log-likelihood and score functions, as well as through the `gamlss2` framework for comparison.
+Both approaches yield the same results and replicate the paper.
+We hope that this demonstration enables further use of the approach which can simplify modeling.
+A particular advantage is on the Weibull distribution, where the VLDAFT model allows for nonproportional hazards by letting the dispersion depend on the location parameter.
+
+**Reference:** Anderson, K.M. (1991). A nonproportional hazards Weibull
+accelerated failure time regression model. *Biometrics*, **47**, 281--288.
+
+## The Model
+
+The VLDAFT model assumes
+
+$$\Pr\!\left\{\frac{\log(T) - \mu}{\sigma} < u\right\} = F(u),$$
+
+where $\mu = \boldsymbol{\beta}'\mathbf{X}$ is a linear function of
+covariates, and the log-dispersion $\log(\sigma)$ can depend on both
+covariates and on $\mu$ itself:
+
+$$\log(\sigma) = \theta_0 + \theta_1 \mu^*.$$
+
+Here $\mu^* = \mu - \bar\mu$ is the centered location parameter.
+When $\theta_1 = 0$, this reduces to the standard linear location AFT
+(LLAFT) model with proportional hazards under a Weibull distribution.
+
+## Data
+
+The example uses 1,433 men aged 30--49 from the Framingham Heart Study,
+followed for approximately 32 years for coronary heart disease (CHD)
+incidence. Risk factors were measured at baseline.
+
+```{r data}
+cat("Observations:", info$observations, "\n")
+cat("CHD events:", info$chd_events, "\n")
+cat("Censored:", info$censored, "\n")
+```
+
+The covariates are log(Age), log(systolic blood pressure),
+log(cholesterol), Metropolitan relative weight, and a smoking indicator.
+
+```{r summary}
+print(info$covariate_summary)
+```
+
+## Model Fitting
+
+Anderson (1991) reported four Weibull models of increasing complexity.
+We reproduce all four.
+
+### Model 1: Standard LLAFT (proportional hazards Weibull)
+
+$$\mu = \boldsymbol{\beta}'\mathbf{X}, \quad \log(\sigma) = \theta_0$$
+
+```{r model1, eval = FALSE}
+fit1 <- vldaft(Surv(YTCHD, CHD) ~ ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke,
+               data = MLT50, dist = "weibull", theta = 0)
+```
+
+```{r model1-summary}
+cat(paste(summaries$fit1, collapse = "\n"), "\n")
+```
+
+Since Model 1 is a standard Weibull AFT, we can cross-check against
+`survival::survreg`:
+
+```{r survreg-check, eval = FALSE}
+fit_survreg <- survreg(
+  Surv(YTCHD, CHD) ~ ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke,
+  data = MLT50, dist = "weibull")
+```
+
+```{r survreg-compare}
+print(checks$coef_compare, digits = 7)
+```
+
+```{r scale-check}
+# Compare scale parameter
+cat("survreg scale (sigma):", checks$survreg_sigma, "\n")
+cat("vldaft  scale (sigma):", checks$vldaft_sigma, "\n")
+```
+
+The coefficients and scale parameter agree, confirming the `vldaft`
+implementation for the standard model.
+
+### Model 2: VLDAFT with dispersion depending on location
+
+$$\mu = \boldsymbol{\beta}'\mathbf{X}, \quad \log(\sigma) = \theta_0 + \theta_1 \mu^*$$
+
+```{r model2, eval = FALSE}
+fit2 <- vldaft(Surv(YTCHD, CHD) ~ ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke,
+               data = MLT50, dist = "weibull", theta = 1)
+```
+
+```{r model2-summary}
+cat(paste(summaries$fit2, collapse = "\n"), "\n")
+```
+
+### Model 3a: Quadratic theta
+
+$$\mu = \boldsymbol{\beta}'\mathbf{X}, \quad \log(\sigma) = \theta_0 + \theta_1 \mu^* + \theta_2 {\mu^*}^2$$
+
+As noted in the paper, convergence from zero starting values can be
+difficult for more complex models. We use Model 2 estimates as
+starting values, appending zero for the new $\theta_2$ parameter.
+
+```{r model3a, eval = FALSE}
+init3a <- c(fit2$coefficients, 0)
+fit3a <- vldaft(Surv(YTCHD, CHD) ~ ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke,
+                data = MLT50, dist = "weibull", theta = 2, init = init3a)
+```
+
+```{r model3a-summary}
+cat(paste(summaries$fit3a, collapse = "\n"), "\n")
+```
+
+### Model 3b: Full scale model
+
+$$\mu = \boldsymbol{\beta}'\mathbf{X}, \quad \log(\sigma) = \boldsymbol{\gamma}'\mathbf{X}$$
+
+Here both location and scale have separate linear predictors with the
+full set of covariates. The `|` operator in the formula separates
+location (left) from scale (right) covariates.
+
+```{r model3b, eval = FALSE}
+fit3b <- vldaft(
+  Surv(YTCHD, CHD) ~ ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke |
+                      ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke,
+  data = MLT50, dist = "weibull", theta = 0)
+```
+
+```{r model3b-summary}
+cat(paste(summaries$fit3b, collapse = "\n"), "\n")
+```
+
+## Comparison with Published Results
+
+The paper reports log-likelihoods on the time scale, which includes a
+Jacobian term $\sum d_i \log(t_i)$. We adjust our log-likelihoods
+accordingly.
+
+```{r comparison}
+print(checks$results_table, row.names = FALSE)
+```
+
+### Likelihood Ratio Test: Model 2 vs Model 1
+
+```{r lrt}
+cat(sprintf("LRT statistic: %.2f  (paper: 20.92)\n", checks$lrt))
+cat(sprintf("p-value (chi-sq, 1 df): %.2e\n", checks$lrt_p))
+```
+
+The LLAFT model is strongly rejected in favor of the VLDAFT model
+($\chi^2_1 = 20.9$, $p < 0.001$).
+
+### Model 2 Coefficient Comparison
+
+```{r coefs}
+print(checks$coef_table, row.names = FALSE)
+```
+
+All coefficients match the published values to their reported precision.
+
+## Fitting with gamlss2
+
+The `vldaft` package provides `gamlss2`-compatible family objects
+(`AFT_Weibull`, `AFT_Logistic`, etc.) so that the same models can be
+fitted through the `gamlss2` framework. This enables the use of smooth
+terms, additional diagnostics, and the full `gamlss2` infrastructure.
+
+We demonstrate by fitting Model 2 (the VLDAFT model with
+$\theta_1$ coupling) via `gamlss2`. In the `gamlss2` formula, the
+`|` separator delineates submodels for each parameter: `mu | sigma | theta1`.
+
+```{r gamlss2-model2, eval = FALSE}
+library(gamlss2)
+
+g2 <- gamlss2(
+  Surv(YTCHD, CHD) ~ ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke | 1 | 1,
+  data = MLT50, family = AFT_Weibull(theta = 1),
+  control = gamlss2_control(maxit = 200))
+```
+
+```{r gamlss2-model2-summary, eval = FALSE}
+summary(g2)
+```
+
+The `gamlss2` log-likelihood matches the `vldaft()` result:
+
+```{r gamlss2-compare, eval = checks$has_gamlss2}
+cat(sprintf("vldaft  loglik: %.3f\ngamlss2 loglik: %.3f\n",
+            checks$gamlss2_loglik[["vldaft"]],
+            checks$gamlss2_loglik[["gamlss2"]]))
+```
+
+We can also verify that Models 1, 3a, and 3b agree:
+
+```{r gamlss2-check, eval = FALSE}
+g1 <- gamlss2(
+  Surv(YTCHD, CHD) ~ ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke,
+  data = MLT50, family = AFT_Weibull())
+
+g3a <- gamlss2(
+  Surv(YTCHD, CHD) ~ ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke | 1 | 1 | 1,
+  data = MLT50, family = AFT_Weibull(theta = 2),
+  control = gamlss2_control(maxit = 200))
+
+g3b <- gamlss2(
+  Surv(YTCHD, CHD) ~ ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke |
+                      ln.Age. + ln.SBP. + ln.Chol. + MRW + Smoke,
+  data = MLT50, family = AFT_Weibull())
+```
+
+```{r gamlss2-table, eval = checks$has_gamlss2}
+print(checks$gamlss2_check, row.names = FALSE)
+```
+
+## Interpretation
+
+The significant negative $\theta_1 = -0.95$ means that as $\mu$
+increases (i.e., as predicted log-survival time increases due to lower
+risk), the dispersion $\sigma$ also increases. Equivalently, the
+cumulative hazard ratio for two individuals shrinks toward unity
+over longer follow-up. This implies:
+
+- Neither the standard Weibull model nor the Cox proportional hazards
+  model is adequate for these data.
+- The association between risk factors and relative risk diminishes
+  over time since measurement---a "converging hazards" phenomenon.
+
+## Predicted Cumulative Incidence
+
+Follow-up in the dataset ranges from less than 1 month to nearly 36
+years (median 31 years, interquartile range 19--34 years). We restrict
+predictions to 30 years to stay within the well-observed range.
+
+To illustrate the nonproportional hazards effect, we compare predicted
+cumulative incidence $F(t) = 1 - S(t)$ for two individuals differing
+only in total cholesterol (160 vs 240 mg/dL), with all other covariates
+held at their sample means.
+
+Under the Weibull model, $S(t) = \exp\{-\exp(w)\}$ where
+$w = (\log t - \mu)/\sigma$.
+
+```{r predict-setup}
+t_grid <- prediction$t_grid
+inc1_240 <- prediction$incidence$model1_chol240
+inc1_160 <- prediction$incidence$model1_chol160
+inc2_240 <- prediction$incidence$model2_chol240
+inc2_160 <- prediction$incidence$model2_chol160
+diff1 <- prediction$excess$model1
+diff2 <- prediction$excess$model2
+```
+
+```{r predict-plot, fig.width = 6, fig.height = 5}
+plot(t_grid, inc1_240, type = "l",
+     col = "firebrick", lwd = 2, lty = 1, ylim = c(0, 0.6),
+     xlab = "Years since baseline", ylab = "Cumulative CHD incidence",
+     main = "Predicted Incidence: Cholesterol 240 vs 160")
+lines(t_grid, inc1_160,
+      col = "steelblue", lwd = 2, lty = 1)
+lines(t_grid, inc2_240,
+      col = "firebrick", lwd = 2, lty = 2)
+lines(t_grid, inc2_160,
+      col = "steelblue", lwd = 2, lty = 2)
+legend("topleft",
+       legend = c("Chol = 240, Model 1 (LLAFT)",
+                  "Chol = 160, Model 1 (LLAFT)",
+                  "Chol = 240, Model 2 (VLDAFT)",
+                  "Chol = 160, Model 2 (VLDAFT)"),
+       col = c("firebrick", "steelblue", "firebrick", "steelblue"),
+       lty = c(1, 1, 2, 2), lwd = 2, bty = "n", cex = 0.85)
+```
+
+The difference in cumulative incidence between cholesterol 240 and 160
+quantifies how much additional risk the higher cholesterol confers over
+time under each model.
+
+```{r diff-plot, fig.width = 6, fig.height = 4.5}
+plot(t_grid, diff1, type = "l", lwd = 2, lty = 1,
+     col = "black", ylim = c(0, max(diff1, diff2) * 1.1),
+     xlab = "Years since baseline",
+     ylab = "Difference in cumulative incidence",
+     main = "Excess Incidence: Cholesterol 240 vs 160")
+lines(t_grid, diff2, lwd = 2, lty = 2, col = "black")
+legend("topleft",
+       legend = c("Model 1 (LLAFT)", "Model 2 (VLDAFT)"),
+       lty = c(1, 2), lwd = 2, bty = "n")
+```
+
+Under both models, higher cholesterol is associated with higher cumulative incidence of CHD over time.
+The difference in cumulative incidence also grows over time.
+The observation that the difference is always greater with the VLDAFT model reflects the model's ability to capture nonproportional hazards.

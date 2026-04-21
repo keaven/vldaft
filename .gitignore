@@ -1,0 +1,20 @@
+# R package build artifacts
+*.o
+*.so
+*.dll
+*.tar.gz
+*.Rcheck/
+
+# Editor/OS files
+.DS_Store
+.Rhistory
+.RData
+.Rproj.user
+
+# Backup files from C refactoring
+src/*.bak
+
+# Rendered vignette HTML (rebuilt on install)
+vignettes/*.html
+src/rust/target/
+docs/

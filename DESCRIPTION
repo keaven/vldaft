@@ -1,0 +1,24 @@
+Package: vldaft
+Title: Non-Proportional Hazards Accelerated Failure Time Regression
+Version: 0.0.0.9000
+Authors@R: 
+    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
+Description: Fits the Anderson (1991) accelerated failure time regression model
+    where both location and scale are functions of covariates, and scale can
+    depend on location via theta polynomial parameters. Supports Weibull,
+    logistic, normal, Cauchy, and gamma error distributions with right
+    censoring, left censoring, and left truncation. Provides a standalone
+    fitting function and gamlss2 family extensions.
+License: GPL (>= 3)
+URL: https://keaven.github.io/vldaft/
+NeedsCompilation: yes
+SystemRequirements: Cargo (Rust's package manager), rustc
+Depends: R (>= 3.5.0)
+Imports: survival, stats
+Suggests: gamlss2, knitr, litedown, rmarkdown
+VignetteBuilder: litedown, knitr
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Additional_repositories: https://gamlss-dev.r-universe.dev
+Remotes: gamlss-dev/gamlss2
