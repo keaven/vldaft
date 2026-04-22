@@ -31,7 +31,7 @@ where
     let mut steepdel = [0.0f64; MAXCOV];
 
     // Compute initial partials
-    let mut i = par(m, beta, db, ddb, finit);
+    let i = par(m, beta, db, ddb, finit);
     if i != 0 {
         return i;
     }

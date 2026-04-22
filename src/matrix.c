@@ -90,7 +90,8 @@ int cholmod(double *s, double *t, double *d, int n)
         }
         t1 = (s[j] > 0 ? s[j] : -s[j]);
         t2 = (t1 > t2 ? t1 : t2);
-        psi += s[j] * s[j++];
+        psi += s[j] * s[j];
+        j++;
     }
     psi = sqrt(psi);
     psi = (psi > 1. ? psi * MACHEPS : MACHEPS);

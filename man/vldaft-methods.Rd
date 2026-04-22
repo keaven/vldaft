@@ -34,12 +34,16 @@
 \arguments{
 \item{x, object}{A \code{vldaft} object.}
 
+\item{digits}{Number of significant digits for printed output.}
+
 \item{...}{Additional arguments (mostly ignored; see specific methods).}
 
-\item{jacobian}{Logical (default \code{FALSE}). If \code{TRUE}, add
-\eqn{\sum_i d_i \log(t_i)}{sum(d * log(t))} to the reported log-likelihood
-so that the value matches the time-scale convention used by
-\code{survival::survreg}.}
+\item{jacobian}{Logical (default \code{FALSE}). The C engine returns the
+log-likelihood on the standardized residual scale -- it does not include
+the \eqn{-\log t_i} Jacobian term that arises when changing variables
+from log-time to time. Set \code{jacobian = TRUE} to subtract
+\eqn{\sum_i d_i \log t_i}{sum(d * log(t))} so the returned value matches
+the time-scale convention used by \code{survival::survreg}.}
 
 \item{newdata}{Optional data frame for \code{predict}. If omitted, the
 training data is implied via the stored \code{time}/\code{status};

@@ -2,7 +2,7 @@
 // Each function takes (event, x) and writes [f0, f1, f2] to the output array.
 // Returns Ok(()) on success, Err(-1) on numerical failure.
 
-use libm::{exp, log, sqrt, atan, lgamma};
+use libm::{exp, log, atan, lgamma, erfc};
 
 /// Weibull distribution: extreme value density/survival/left-truncation
 pub fn weibull(event: i32, x: f64, f: &mut [f64; 3]) -> Result<(), i32> {
@@ -28,8 +28,8 @@ pub fn weibull(event: i32, x: f64, f: &mut [f64; 3]) -> Result<(), i32> {
     Ok(())
 }
 
-/// Gamma distribution
-pub fn gamma_dist(event: i32, x: f64, f: &mut [f64; 3], nu: f64, enu: f64) -> Result<(), i32> {
+/// Gamma distribution. Only `enu = exp(nu)` enters the partials.
+pub fn gamma_dist(event: i32, x: f64, f: &mut [f64; 3], enu: f64) -> Result<(), i32> {
     if x > 39.0 {
         return Err(-1);
     }
@@ -169,41 +169,20 @@ fn log_dnorm(x: f64) -> f64 {
     LOG_INV_SQRT_2PI - 0.5 * x * x
 }
 
-/// Standard normal CDF using rational approximation (Abramowitz & Stegun)
+/// Standard normal CDF, P(Z <= x).
+/// Uses libm::erfc to match the precision of R's `pnorm`.
 pub fn pnorm_cdf(x: f64) -> f64 {
-    // Use the error function approach
     0.5 * erfc(-x / std::f64::consts::SQRT_2)
 }
 
-/// log of upper tail P(Z > x)
+/// log P(Z > x) -- numerically stable for large positive x.
 fn log_pnorm_upper(x: f64) -> f64 {
     if x < 6.0 {
-        log(1.0 - pnorm_cdf(x))
+        log(0.5 * erfc(x / std::f64::consts::SQRT_2))
     } else {
-        // Mills ratio approximation for large x
+        // Mills-ratio asymptotic, accurate to ~1e-15 for x >= 6.
         log_dnorm(x) - log(x) + log(1.0 - 1.0 / (x * x))
     }
-}
-
-/// Complementary error function
-fn erfc(x: f64) -> f64 {
-    // Use a good rational approximation
-    if x >= 0.0 {
-        erfc_positive(x)
-    } else {
-        2.0 - erfc_positive(-x)
-    }
-}
-
-/// erfc for x >= 0 using Horner form of rational approximation
-fn erfc_positive(x: f64) -> f64 {
-    let t = 1.0 / (1.0 + 0.3275911 * x);
-    let poly = t * (0.254829592
-        + t * (-0.284496736
-            + t * (1.421413741
-                + t * (-1.453152027
-                    + t * 1.061405429))));
-    poly * exp(-x * x)
 }
 
 /// Regularized incomplete gamma P(a, x) or Q(a, x)
@@ -237,12 +216,10 @@ fn gamma_series(a: f64, x: f64) -> f64 {
 
 /// Regularized upper incomplete gamma by continued fraction (Lentz)
 fn gamma_cf(a: f64, x: f64) -> f64 {
-    let mut f = 1e-30_f64;
     let mut c = 1e-30_f64;
-    let mut d: f64;
     let b0 = x + 1.0 - a;
-    d = 1.0 / b0;
-    f = d;
+    let mut d = 1.0 / b0;
+    let mut f = d;
     for n in 1..200 {
         let nf = n as f64;
         let an = nf * (a - nf);

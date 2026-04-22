@@ -6,6 +6,11 @@
 #'
 #' @param theta Integer, order of the theta polynomial linking log(sigma) to mu.
 #'   Default 0 (no coupling).
+#' @param nu Numeric, shape parameter for the gamma distribution
+#'   (only used by \code{AFT_Gamma}; the parameterization mirrors
+#'   the C/Rust engines, which treat \code{enu = exp(nu)} as the
+#'   gamma shape). Default \code{1}.
+#' @importFrom stats sd
 #'
 #' @details
 #' The model is:

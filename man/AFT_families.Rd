@@ -22,6 +22,11 @@ AFT_Gamma(theta = 0L, nu = 1)
 \arguments{
 \item{theta}{Integer, order of the theta polynomial linking log(sigma) to mu.
 Default 0 (no coupling).}
+
+\item{nu}{Numeric, shape parameter for the gamma distribution
+(only used by \code{AFT_Gamma}; the parameterization mirrors
+the C/Rust engines, which treat \code{enu = exp(nu)} as the
+gamma shape). Default \code{1}.}
 }
 \value{
 A \code{gamlss2.family} object.

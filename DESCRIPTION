@@ -23,7 +23,7 @@ SystemRequirements: Cargo (>= 1.70.0) and rustc, the Rust compiler
 Depends: R (>= 3.5.0)
 Imports: survival, stats
 Suggests: gamlss2, knitr, litedown, rmarkdown, testthat (>= 3.0.0)
-VignetteBuilder: knitr
+VignetteBuilder: knitr, litedown
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3

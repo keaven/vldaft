@@ -20,6 +20,7 @@ NULL
 
 
 #' @rdname vldaft-methods
+#' @param digits Number of significant digits for printed output.
 #' @export
 print.vldaft <- function(x, digits = max(3L, getOption("digits") - 3L), ...) {
   cat("AFT Regression Model (Anderson 1991)\n")
@@ -108,10 +109,12 @@ vcov.vldaft <- function(object, ...) object$vcov
 
 
 #' @rdname vldaft-methods
-#' @param jacobian Logical (default \code{FALSE}). If \code{TRUE}, add
-#'   \eqn{\sum_i d_i \log(t_i)}{sum(d * log(t))} to the reported log-likelihood
-#'   so that the value matches the time-scale convention used by
-#'   \code{survival::survreg}.
+#' @param jacobian Logical (default \code{FALSE}). The C engine returns the
+#'   log-likelihood on the standardized residual scale -- it does not include
+#'   the \eqn{-\log t_i} Jacobian term that arises when changing variables
+#'   from log-time to time. Set \code{jacobian = TRUE} to subtract
+#'   \eqn{\sum_i d_i \log t_i}{sum(d * log(t))} so the returned value matches
+#'   the time-scale convention used by \code{survival::survreg}.
 #' @export
 logLik.vldaft <- function(object, jacobian = FALSE, ...) {
   ll <- object$loglik
@@ -121,7 +124,7 @@ logLik.vldaft <- function(object, jacobian = FALSE, ...) {
     if (is.null(d) || is.null(t))
       stop("logLik(jacobian = TRUE) needs time/status stored on the fit; ",
            "refit with the current version of vldaft().", call. = FALSE)
-    ll <- ll + sum(d * log(t))
+    ll <- ll - sum(d * log(t))
   }
   attr(ll, "df") <- object$npar
   attr(ll, "nobs") <- object$nobs

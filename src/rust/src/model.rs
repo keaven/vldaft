@@ -21,8 +21,8 @@ impl Distribution {
             Distribution::Logistic       => distributions::logistic(event, x, f),
             Distribution::Normal         => distributions::normal_dist(event, x, f),
             Distribution::Cauchy         => distributions::cauchy_dist(event, x, f),
-            Distribution::Gamma { nu, enu } => {
-                distributions::gamma_dist(event, x, f, *nu, *enu)
+            Distribution::Gamma { enu, .. } => {
+                distributions::gamma_dist(event, x, f, *enu)
             }
         }
     }
@@ -37,8 +37,6 @@ pub struct ModelState {
     pub mlo1: usize,
     pub ntheta: usize,
     pub npar: usize,
-    pub spmlo: usize,
-    pub spmlo1: usize,
 
     pub tcol: usize,
     pub cencol: usize,
@@ -103,7 +101,6 @@ impl ModelState {
         } else {
             1
         };
-        let spmlo1 = nsc + mlo1;
 
         let ploc: Vec<usize>   = loc_cols.iter().map(|&c| c as usize).collect();
         let pscale: Vec<usize> = scale_cols.iter().map(|&c| c as usize).collect();
@@ -116,8 +113,6 @@ impl ModelState {
             mlo1,
             ntheta,
             npar: nsc + nlo + ntheta,
-            spmlo,
-            spmlo1,
             tcol: time_col,
             cencol: event_col,
             startcol: start_col,
