@@ -4,7 +4,7 @@ STATLIB    = $(LIBDIR)/libvldaft.a
 PKG_LIBS   = -L$(LIBDIR) -lvldaft
 
 # C sources compiled into the shared library.
-C_SOURCES = init.c vldaft_fit.c dataio8.c loscreg8.c nrmod.c matrix.c
+C_SOURCES = init.c vldaft_fit.c vldaft_cure_eval.c dataio8.c loscreg8.c nrmod.c matrix.c
 OBJECTS   = $(C_SOURCES:.c=.o)
 
 all: $(SHLIB)

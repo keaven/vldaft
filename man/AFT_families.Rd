@@ -7,7 +7,13 @@
 \alias{AFT_Normal}
 \alias{AFT_Cauchy}
 \alias{AFT_Gamma}
-\title{AFT Family Constructors for gamlss2}
+\alias{Cure_Weibull}
+\alias{Cure_Logistic}
+\alias{Cure_Normal}
+\alias{Cure_Cauchy}
+\alias{Cure_Gamma}
+\alias{Cure_Exponential}
+\title{AFT and Cure Family Constructors for gamlss2}
 \usage{
 AFT_Weibull(theta = 0L)
 
@@ -18,33 +24,60 @@ AFT_Normal(theta = 0L)
 AFT_Cauchy(theta = 0L)
 
 AFT_Gamma(theta = 0L, nu = 1)
+
+Cure_Weibull(theta = 0L)
+
+Cure_Logistic(theta = 0L)
+
+Cure_Normal(theta = 0L)
+
+Cure_Cauchy(theta = 0L)
+
+Cure_Gamma(theta = 0L, base_nu = 1)
+
+Cure_Exponential()
 }
 \arguments{
-\item{theta}{Integer, order of the theta polynomial linking log(sigma) to mu.
-Default 0 (no coupling).}
+\item{theta}{Integer, order of the theta polynomial linking
+\eqn{\log(\sigma)} to \eqn{\mu}. Default 0 (no coupling).}
 
 \item{nu}{Numeric, shape parameter for the gamma distribution
 (only used by \code{AFT_Gamma}; the parameterization mirrors
 the C/Rust engines, which treat \code{enu = exp(nu)} as the
 gamma shape). Default \code{1}.}
+
+\item{base_nu}{Numeric, baseline gamma-shape parameter used by
+\code{Cure_Gamma()}. This is separate from the cure-fraction
+regression parameter \code{nu}. Default \code{1}.}
 }
 \value{
 A \code{gamlss2.family} object.
 }
 \description{
-These functions create gamlss2 family objects for accelerated failure time
-models with five error distributions. Each family handles \code{Surv()}
-responses with right censoring, left censoring, and left truncation.
+These functions create \code{gamlss2} family objects for accelerated
+failure time models and their Poisson-mixture cure-model extensions.
+They handle \code{Surv()} responses with right censoring and left
+truncation (counting-process form).
 }
 \details{
-The model is:
+The plain AFT model is
 \deqn{\log(T) = \mu + \sigma_{eff} \cdot \varepsilon}
-where \eqn{\log(\sigma_{eff}) = \log(\sigma) + \sum_k \theta_k (\mu - \bar\mu)^k}
+where
+\deqn{\log(\sigma_{eff}) = \log(\sigma) + \sum_k \theta_k (\mu - \bar\mu)^k.}
+
+The cure-model extension wraps the baseline survival distribution
+\eqn{S_0(t)} as
+\deqn{S(t) = \exp\{-\tau (1 - S_0(t))\}, \qquad \tau = -\log(p),}
+where \eqn{p = \mathrm{logit}^{-1}(\nu)} is the cure probability.
 
 Parameters:
 \describe{
-\item{mu}{Location parameter (identity link)}
-\item{sigma}{Scale parameter (log link)}
-\item{theta1, theta2, ...}{Coupling parameters (identity link), if theta > 0}
+\item{mu}{Location parameter (identity link).}
+\item{sigma}{Scale parameter (log link), omitted for
+\code{Cure_Exponential()}.}
+\item{nu}{Cure probability \eqn{p} on the response scale
+(logit link) for the cure-model families.}
+\item{theta1, theta2, ...}{Coupling parameters (identity link), if
+\code{theta > 0}.}
 }
 }

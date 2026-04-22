@@ -21,6 +21,10 @@
 #'   for \eqn{\sigma}). Default \code{NULL} means all location covariates.
 #' @param nu Numeric, shape parameter for the gamma distribution (only used
 #'   when \code{dist = "gamma"}).
+#' @param cure Logical; if \code{TRUE}, fit the Poisson-mixture cure-model
+#'   extension with an additional cure-fraction regression block. When the
+#'   formula contains a third \code{|}-separated block, \code{cure = TRUE}
+#'   is implied.
 #' @param init Numeric vector of initial parameter values, or \code{NULL}
 #'   for zeros.
 #' @param control A list of control parameters: \code{acc} (convergence
@@ -71,7 +75,7 @@
 #' @export
 vldaft <- function(formula, data,
                    dist = c("weibull", "logistic", "normal", "cauchy", "gamma"),
-                   theta = 0L, theta_vars = NULL, nu = 1.0,
+                   theta = 0L, theta_vars = NULL, nu = 1.0, cure = FALSE,
                    init = NULL, control = list(), adjust = TRUE,
                    backend = c("c", "rust")) {
 
@@ -87,6 +91,8 @@ vldaft <- function(formula, data,
 
   f_parts <- parse_vldaft_formula(formula, data)
 
+  cure <- isTRUE(cure) || !is.null(f_parts$cure_formula)
+
   mf_loc <- model.frame(f_parts$loc_formula, data, na.action = stats::na.pass)
   if (anyNA(mf_loc))
     stop("NA values in location covariates; please handle NAs before calling vldaft()",
@@ -101,6 +107,24 @@ vldaft <- function(formula, data,
     scale_mm <- model.matrix(f_parts$scale_formula, mf_sc)
   } else {
     scale_mm <- model.matrix(~ 1, data.frame(.y = rep(1, nrow(data))))
+  }
+
+  if (cure) {
+    if (!is.null(f_parts$cure_formula)) {
+      mf_cu <- model.frame(f_parts$cure_formula, data, na.action = stats::na.pass)
+      if (anyNA(mf_cu))
+        stop("NA values in cure covariates; please handle NAs before calling vldaft()",
+             call. = FALSE)
+      cure_mm <- model.matrix(f_parts$cure_formula, mf_cu)
+    } else {
+      cure_mm <- model.matrix(~ 1, data.frame(.y = rep(1, nrow(data))))
+    }
+    if (backend != "c") {
+      stop("Cure-model fitting is currently implemented only for backend = 'c'",
+           call. = FALSE)
+    }
+  } else {
+    cure_mm <- NULL
   }
 
   surv_obj <- f_parts$response
@@ -132,6 +156,13 @@ vldaft <- function(formula, data,
   loc_names <- colnames(loc_mm)
   nloc <- ncol(loc_mm)
   nsc <- ncol(scale_mm)
+  ncu <- if (cure) ncol(cure_mm) else 0L
+
+  if (cure && isTRUE(adjust)) {
+    loc_mm <- .vldaft_center_model_matrix(loc_mm)
+    scale_mm <- .vldaft_center_model_matrix(scale_mm)
+    if (cure) cure_mm <- .vldaft_center_model_matrix(cure_mm)
+  }
 
   if (theta > 0 && !is.null(theta_vars)) {
     tv_mm <- model.matrix(theta_vars, data)
@@ -148,27 +179,36 @@ vldaft <- function(formula, data,
     mlo1_val <- -1L
   }
 
-  total_par <- nsc + nloc + theta
+  total_par <- nsc + nloc + theta + ncu
   if (total_par > 30L)
     stop(sprintf(
-      "vldaft supports at most 30 parameters (scale + location + theta); got %d",
+      "vldaft supports at most 30 parameters (scale + location + cure + theta); got %d",
       total_par), call. = FALSE)
 
-  ncol_total <- nsc + nloc + 4L
+  if (cure && max(nloc, nsc, ncu, theta) > 30L) {
+    stop("Each cure-model parameter block must have at most 30 coefficients",
+         call. = FALSE)
+  }
+
+  ncol_total <- nsc + nloc + ncu + 4L
   data_matrix <- matrix(0, nrow = n, ncol = ncol_total)
   data_matrix[, seq_len(nsc)]                   <- scale_mm
   data_matrix[, nsc + seq_len(nloc)]            <- loc_mm
-  data_matrix[, nsc + nloc + 1L]                <- time_var
-  data_matrix[, nsc + nloc + 2L]                <- status_var
-  data_matrix[, nsc + nloc + 3L]                <- start_var
-  data_matrix[, nsc + nloc + 4L]                <- t0_var
+  if (cure) {
+    data_matrix[, nsc + nloc + seq_len(ncu)]    <- cure_mm
+  }
+  data_matrix[, nsc + nloc + ncu + 1L]          <- time_var
+  data_matrix[, nsc + nloc + ncu + 2L]          <- status_var
+  data_matrix[, nsc + nloc + ncu + 3L]          <- start_var
+  data_matrix[, nsc + nloc + ncu + 4L]          <- t0_var
 
   scale_cols <- as.integer(0:(nsc - 1))
   loc_cols   <- as.integer(nsc:(nsc + nloc - 1))
-  time_col   <- as.integer(nsc + nloc)
-  event_col  <- as.integer(nsc + nloc + 1)
-  start_col_idx <- if (has_start) as.integer(nsc + nloc + 2) else -1L
-  t0_col_idx    <- if (has_start) as.integer(nsc + nloc + 3) else -1L
+  cure_cols  <- if (cure) as.integer((nsc + nloc):(nsc + nloc + ncu - 1L)) else integer(0)
+  time_col   <- as.integer(nsc + nloc + ncu)
+  event_col  <- as.integer(nsc + nloc + ncu + 1L)
+  start_col_idx <- if (has_start) as.integer(nsc + nloc + ncu + 2) else -1L
+  t0_col_idx    <- if (has_start) as.integer(nsc + nloc + ncu + 3) else -1L
 
   dist_code <- switch(dist,
     weibull = 1L, logistic = 2L, normal = 3L, cauchy = 4L, gamma = 5L)
@@ -176,27 +216,46 @@ vldaft <- function(formula, data,
   ctrl <- list(acc = 1e-4, maxiter = 50L, maxhalv = 20L)
   ctrl[names(control)] <- control
 
-  call_name <- if (backend == "rust") "wrap__vldaft_fit_rust" else "vldaft_fit"
-  fit <- .Call(call_name,
-    data_matrix,
-    time_col,
-    event_col,
-    1L,
-    -1L,
-    start_col_idx,
-    t0_col_idx,
-    loc_cols,
-    scale_cols,
-    theta,
-    as.integer(mlo1_val),
-    dist_code,
-    as.double(nu),
-    if (!is.null(init)) as.double(init) else NULL,
-    as.double(ctrl$acc),
-    as.integer(ctrl$maxiter),
-    as.integer(ctrl$maxhalv),
-    as.integer(isTRUE(adjust))
-  )
+  if (cure) {
+    fit <- .fit_vldaft_cure(
+      data_matrix = data_matrix,
+      time_col = time_col,
+      event_col = event_col,
+      start_col_idx = start_col_idx,
+      t0_col_idx = t0_col_idx,
+      loc_cols = loc_cols,
+      scale_cols = scale_cols,
+      cure_cols = cure_cols,
+      theta = theta,
+      mlo1_val = mlo1_val,
+      dist = dist,
+      base_nu = nu,
+      init = init,
+      control = ctrl
+    )
+  } else {
+    call_name <- if (backend == "rust") "wrap__vldaft_fit_rust" else "vldaft_fit"
+    fit <- .Call(call_name,
+      data_matrix,
+      time_col,
+      event_col,
+      1L,
+      -1L,
+      start_col_idx,
+      t0_col_idx,
+      loc_cols,
+      scale_cols,
+      theta,
+      as.integer(mlo1_val),
+      dist_code,
+      as.double(nu),
+      if (!is.null(init)) as.double(init) else NULL,
+      as.double(ctrl$acc),
+      as.integer(ctrl$maxiter),
+      as.integer(ctrl$maxhalv),
+      as.integer(isTRUE(adjust))
+    )
+  }
 
   if (fit$iter < 0) {
     conv_msg <- switch(as.character(fit$iter),
@@ -214,8 +273,9 @@ vldaft <- function(formula, data,
 
   gamma_names <- paste0("gamma:", colnames(scale_mm))
   eta_names   <- paste0("eta:", colnames(loc_mm))
+  cure_names  <- if (cure) paste0("cure:", colnames(cure_mm)) else character(0)
   theta_names <- if (theta > 0) paste0("theta", seq_len(theta)) else character(0)
-  coef_names  <- c(gamma_names, eta_names, theta_names)
+  coef_names  <- c(gamma_names, eta_names, cure_names, theta_names)
   names(fit$coefficients) <- coef_names
   rownames(fit$vcov) <- coef_names
   colnames(fit$vcov) <- coef_names
@@ -236,12 +296,14 @@ vldaft <- function(formula, data,
     theta        = theta,
     theta_vars   = theta_vars,
     nu           = nu,
+    cure         = cure,
     adjust       = isTRUE(adjust),
     formula      = formula,
     call         = cl,
     backend      = backend,
     scale_names  = colnames(scale_mm),
     loc_names    = colnames(loc_mm),
+    cure_names   = if (cure) colnames(cure_mm) else character(0),
     time         = time_var,
     status       = status_var,
     start        = t0_var,
@@ -271,18 +333,158 @@ parse_vldaft_formula <- function(formula, data) {
   response <- model.response(mf)
 
   rhs <- formula[[3L]]
-  if (length(rhs) >= 2L && identical(rhs[[1L]], as.name("|"))) {
-    loc_formula <- stats::reformulate(deparse(rhs[[2L]], width.cutoff = 500L),
-                                      response = NULL)
-    scale_formula <- stats::reformulate(deparse(rhs[[3L]], width.cutoff = 500L),
-                                        response = NULL)
-  } else {
-    loc_formula <- stats::reformulate(deparse(rhs, width.cutoff = 500L),
-                                      response = NULL)
-    scale_formula <- NULL
+  rhs_parts <- .flatten_vldaft_rhs(rhs)
+
+  loc_formula <- stats::reformulate(deparse(rhs_parts[[1L]], width.cutoff = 500L),
+                                    response = NULL)
+  scale_formula <- if (length(rhs_parts) >= 2L) {
+    stats::reformulate(deparse(rhs_parts[[2L]], width.cutoff = 500L),
+                       response = NULL)
+  } else NULL
+  cure_formula <- if (length(rhs_parts) >= 3L) {
+    stats::reformulate(deparse(rhs_parts[[3L]], width.cutoff = 500L),
+                       response = NULL)
+  } else NULL
+  if (length(rhs_parts) > 3L) {
+    stop("`formula` supports at most three RHS blocks: location | scale | cure",
+         call. = FALSE)
   }
 
   list(response = response,
        loc_formula = loc_formula,
-       scale_formula = scale_formula)
+       scale_formula = scale_formula,
+       cure_formula = cure_formula)
+}
+
+.flatten_vldaft_rhs <- function(rhs) {
+  if (is.call(rhs) && identical(rhs[[1L]], as.name("|"))) {
+    c(.flatten_vldaft_rhs(rhs[[2L]]), list(rhs[[3L]]))
+  } else {
+    list(rhs)
+  }
+}
+
+.vldaft_center_model_matrix <- function(mm) {
+  mm <- as.matrix(mm)
+  if (!ncol(mm)) return(mm)
+  intercept_col <- which(colnames(mm) == "(Intercept)")
+  idx <- seq_len(ncol(mm))
+  if (length(intercept_col) == 1L) idx <- setdiff(idx, intercept_col)
+  if (length(idx)) {
+    mm[, idx] <- sweep(mm[, idx, drop = FALSE], 2, colMeans(mm[, idx, drop = FALSE]),
+                       FUN = "-")
+  }
+  mm
+}
+
+.vldaft_cure_dist_code <- function(dist) {
+  switch(dist,
+         weibull = 1L, logistic = 2L, normal = 3L, cauchy = 4L, gamma = 5L,
+         stop("Unsupported cure-model distribution: ", dist, call. = FALSE))
+}
+
+.fit_vldaft_cure <- function(data_matrix, time_col, event_col, start_col_idx,
+                             t0_col_idx, loc_cols, scale_cols, cure_cols,
+                             theta, mlo1_val, dist, base_nu, init, control) {
+  nobs <- nrow(data_matrix)
+  nloc <- length(loc_cols)
+  nsc <- length(scale_cols)
+  ncu <- length(cure_cols)
+  dist_code <- .vldaft_cure_dist_code(dist)
+
+  if (is.null(init)) {
+    logt <- log(data_matrix[, time_col + 1L])
+    p0 <- min(0.5, max(0.05, mean(data_matrix[, event_col + 1L] == 0) / 2))
+    init <- c(
+      rep(0, nsc),
+      c(mean(logt), rep(0, max(0, nloc - 1L))),
+      c(stats::qlogis(p0), rep(0, max(0, ncu - 1L))),
+      rep(0, theta)
+    )
+    if (nsc > 0) init[1L] <- log(stats::sd(logt))
+  } else {
+    init <- as.double(init)
+  }
+
+  expected_len <- nsc + nloc + ncu + theta
+  if (length(init) != expected_len) {
+    stop(sprintf("`init` must have length %d for this cure model; got %d",
+                 expected_len, length(init)),
+         call. = FALSE)
+  }
+
+  cache <- new.env(parent = emptyenv())
+  cache$par <- NULL
+  cache$val <- NULL
+  evaluate <- function(par) {
+    if (!is.null(cache$par) && isTRUE(all.equal(par, cache$par, tolerance = 0))) {
+      return(cache$val)
+    }
+    val <- .Call(
+      "vldaft_cure_eval",
+      data_matrix,
+      as.integer(time_col),
+      as.integer(event_col),
+      as.integer(start_col_idx),
+      as.integer(t0_col_idx),
+      as.integer(loc_cols),
+      as.integer(scale_cols),
+      as.integer(cure_cols),
+      as.integer(theta),
+      as.integer(mlo1_val),
+      as.integer(dist_code),
+      as.double(base_nu),
+      as.double(par),
+      0L
+    )
+    cache$par <- par
+    cache$val <- val
+    val
+  }
+  safe_evaluate <- function(par) {
+    tryCatch(
+      evaluate(par),
+      error = function(e) list(
+        loglik = -1e12 - sum(par^2),
+        gradient = rep(0, length(par))
+      )
+    )
+  }
+
+  objective <- function(par) {
+    val <- safe_evaluate(par)
+    -val$loglik
+  }
+  gradient <- function(par) {
+    val <- safe_evaluate(par)
+    -val$gradient
+  }
+
+  opt <- stats::optim(
+    par = init,
+    fn = objective,
+    gr = gradient,
+    method = "BFGS",
+    control = list(reltol = control$acc, maxit = control$maxiter)
+  )
+
+  final_eval <- safe_evaluate(opt$par)
+  init_eval <- safe_evaluate(init)
+  hess <- stats::optimHess(opt$par, fn = objective, gr = gradient)
+  vcov <- tryCatch(solve(hess), error = function(e) {
+    warning("Unable to invert cure-model Hessian at solution", call. = FALSE)
+    matrix(NA_real_, nrow = expected_len, ncol = expected_len)
+  })
+
+  list(
+    coefficients = opt$par,
+    vcov = vcov,
+    loglik = final_eval$loglik,
+    loglik_init = init_eval$loglik,
+    score = sum(final_eval$gradient^2),
+    iter = opt$counts[["function"]],
+    npar = expected_len,
+    nobs = nobs,
+    converged = opt$convergence == 0
+  )
 }

@@ -26,7 +26,7 @@
 \method{predict}{vldaft}(
   object,
   newdata,
-  type = c("lp", "logsigma", "sigma", "median", "survival"),
+  type = c("lp", "logsigma", "sigma", "median", "cure", "survival"),
   times = NULL,
   ...
 )
@@ -52,7 +52,8 @@ supply \code{newdata} to predict on new covariates.}
 \item{type}{One of \code{"lp"} (linear predictor for mu, the default),
 \code{"logsigma"}, \code{"sigma"}, \code{"median"} (predicted log-time
 plus \code{sigma * q0.5} where \code{q0.5} is the median of the
-standardized error), or \code{"survival"} (requires \code{times}).}
+standardized error), \code{"cure"} (predicted cure probability for
+cure-model fits), or \code{"survival"} (requires \code{times}).}
 
 \item{times}{Numeric vector of times at which to evaluate survival when
 \code{type = "survival"}.}

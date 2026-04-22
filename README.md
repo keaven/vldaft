@@ -66,6 +66,8 @@ summary(fit2)
 ## Features
 
 - **Five error distributions**: Weibull, logistic, normal, Cauchy, gamma.
+- **Poisson-mixture cure families**: generic cure wrappers over the AFT
+  baselines, including `Cure_Weibull()` and `Cure_Exponential()`.
 - **Censoring**: right censoring, left censoring, left truncation.
 - **Scale–location coupling**: polynomial `theta` parameters linking
   `log(sigma)` to `mu`.
@@ -74,7 +76,9 @@ summary(fit2)
 - **Dual back ends**: C and Rust implementations, selectable via
   `backend = c("c", "rust")`.
 - **`gamlss2` families**: `AFT_Weibull()`, `AFT_Logistic()`,
-  `AFT_Normal()`, `AFT_Cauchy()`, `AFT_Gamma()`.
+  `AFT_Normal()`, `AFT_Cauchy()`, `AFT_Gamma()`, plus
+  `Cure_Weibull()`, `Cure_Logistic()`, `Cure_Normal()`,
+  `Cure_Cauchy()`, `Cure_Gamma()`, and `Cure_Exponential()`.
 
 ## Reference
 

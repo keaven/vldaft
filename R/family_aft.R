@@ -1,27 +1,41 @@
-#' AFT Family Constructors for gamlss2
+#' AFT and Cure Family Constructors for gamlss2
 #'
-#' These functions create gamlss2 family objects for accelerated failure time
-#' models with five error distributions. Each family handles \code{Surv()}
-#' responses with right censoring, left censoring, and left truncation.
+#' These functions create \code{gamlss2} family objects for accelerated
+#' failure time models and their Poisson-mixture cure-model extensions.
+#' They handle \code{Surv()} responses with right censoring and left
+#' truncation (counting-process form).
 #'
-#' @param theta Integer, order of the theta polynomial linking log(sigma) to mu.
-#'   Default 0 (no coupling).
+#' @param theta Integer, order of the theta polynomial linking
+#'   \eqn{\log(\sigma)} to \eqn{\mu}. Default 0 (no coupling).
 #' @param nu Numeric, shape parameter for the gamma distribution
 #'   (only used by \code{AFT_Gamma}; the parameterization mirrors
 #'   the C/Rust engines, which treat \code{enu = exp(nu)} as the
 #'   gamma shape). Default \code{1}.
+#' @param base_nu Numeric, baseline gamma-shape parameter used by
+#'   \code{Cure_Gamma()}. This is separate from the cure-fraction
+#'   regression parameter \code{nu}. Default \code{1}.
 #' @importFrom stats sd
 #'
 #' @details
-#' The model is:
+#' The plain AFT model is
 #' \deqn{\log(T) = \mu + \sigma_{eff} \cdot \varepsilon}
-#' where \eqn{\log(\sigma_{eff}) = \log(\sigma) + \sum_k \theta_k (\mu - \bar\mu)^k}
+#' where
+#' \deqn{\log(\sigma_{eff}) = \log(\sigma) + \sum_k \theta_k (\mu - \bar\mu)^k.}
+#'
+#' The cure-model extension wraps the baseline survival distribution
+#' \eqn{S_0(t)} as
+#' \deqn{S(t) = \exp\{-\tau (1 - S_0(t))\}, \qquad \tau = -\log(p),}
+#' where \eqn{p = \mathrm{logit}^{-1}(\nu)} is the cure probability.
 #'
 #' Parameters:
 #' \describe{
-#'   \item{mu}{Location parameter (identity link)}
-#'   \item{sigma}{Scale parameter (log link)}
-#'   \item{theta1, theta2, ...}{Coupling parameters (identity link), if theta > 0}
+#'   \item{mu}{Location parameter (identity link).}
+#'   \item{sigma}{Scale parameter (log link), omitted for
+#'     \code{Cure_Exponential()}.}
+#'   \item{nu}{Cure probability \eqn{p} on the response scale
+#'     (logit link) for the cure-model families.}
+#'   \item{theta1, theta2, ...}{Coupling parameters (identity link), if
+#'     \code{theta > 0}.}
 #' }
 #'
 #' @return A \code{gamlss2.family} object.
@@ -32,331 +46,174 @@ NULL
 #' @rdname AFT_families
 #' @export
 AFT_Weibull <- function(theta = 0L) {
-  .aft_family("weibull", theta)
+  .aft_family("weibull", theta = theta)
 }
 
 #' @rdname AFT_families
 #' @export
 AFT_Logistic <- function(theta = 0L) {
-  .aft_family("logistic", theta)
+  .aft_family("logistic", theta = theta)
 }
 
 #' @rdname AFT_families
 #' @export
 AFT_Normal <- function(theta = 0L) {
-  .aft_family("normal", theta)
+  .aft_family("normal", theta = theta)
 }
 
 #' @rdname AFT_families
 #' @export
 AFT_Cauchy <- function(theta = 0L) {
-  .aft_family("cauchy", theta)
+  .aft_family("cauchy", theta = theta)
 }
 
 #' @rdname AFT_families
 #' @export
 AFT_Gamma <- function(theta = 0L, nu = 1) {
-  .aft_family("gamma", theta, nu = nu)
+  .aft_family("gamma", theta = theta, dist_nu = nu)
+}
+
+#' @rdname AFT_families
+#' @export
+Cure_Weibull <- function(theta = 0L) {
+  .aft_family("weibull", theta = theta, cure = TRUE)
+}
+
+#' @rdname AFT_families
+#' @export
+Cure_Logistic <- function(theta = 0L) {
+  .aft_family("logistic", theta = theta, cure = TRUE)
+}
+
+#' @rdname AFT_families
+#' @export
+Cure_Normal <- function(theta = 0L) {
+  .aft_family("normal", theta = theta, cure = TRUE)
+}
+
+#' @rdname AFT_families
+#' @export
+Cure_Cauchy <- function(theta = 0L) {
+  .aft_family("cauchy", theta = theta, cure = TRUE)
+}
+
+#' @rdname AFT_families
+#' @export
+Cure_Gamma <- function(theta = 0L, base_nu = 1) {
+  .aft_family("gamma", theta = theta, cure = TRUE, dist_nu = base_nu)
+}
+
+#' @rdname AFT_families
+#' @export
+Cure_Exponential <- function() {
+  .aft_family("weibull", theta = 0L, cure = TRUE, fixed_sigma = TRUE)
 }
 
 
-## Internal: build the family object
-.aft_family <- function(dist, theta = 0L, nu = 1) {
+## Baseline helpers ---------------------------------------------------------
 
-  ## Parameter names and links
-  par_names <- c("mu", "sigma")
-  par_links <- c(mu = "identity", sigma = "log")
-  if (theta > 0) {
+.aft_family <- function(dist, theta = 0L, dist_nu = 1, cure = FALSE,
+                        fixed_sigma = FALSE) {
+  theta <- as.integer(theta)
+  if (theta < 0L) {
+    stop("`theta` must be non-negative", call. = FALSE)
+  }
+  if (fixed_sigma && theta > 0L) {
+    stop("`theta` is not supported when sigma is fixed", call. = FALSE)
+  }
+
+  par_names <- "mu"
+  par_links <- c(mu = "identity")
+  if (!fixed_sigma) {
+    par_names <- c(par_names, "sigma")
+    par_links <- c(par_links, sigma = "log")
+  }
+  if (cure) {
+    par_names <- c(par_names, "nu")
+    par_links <- c(par_links, nu = "logit")
+  }
+  if (theta > 0L) {
     th_names <- paste0("theta", seq_len(theta))
     par_names <- c(par_names, th_names)
-    lnks <- rep("identity", theta)
-    names(lnks) <- th_names
-    par_links <- c(par_links, lnks)
+    th_links <- rep("identity", theta)
+    names(th_links) <- th_names
+    par_links <- c(par_links, th_links)
   }
 
-  ## Density/survival/hazard helpers (on standardized scale w = (log(t) - mu) / sigma_eff)
-  ## Returns list(logf, logS, logS_lower) for a single observation
-  .log_densities <- function(w, dist, nu) {
-    switch(dist,
-      weibull = {
-        logf <- w - exp(w)
-        logS <- -exp(w)
-      },
-      logistic = {
-        logf <- w - 2 * log(1 + exp(w))
-        logS <- -log(1 + exp(w))
-      },
-      normal = {
-        logf <- dnorm(w, log = TRUE)
-        logS <- pnorm(w, lower.tail = FALSE, log.p = TRUE)
-      },
-      cauchy = {
-        logf <- -log(pi) - log(1 + w^2)
-        logS <- -atan(w) / pi + 0.5
-        logS <- log(pmax(logS, .Machine$double.eps))  # logS is actually log(S)
-      },
-      gamma = {
-        enu <- exp(nu)
-        logf <- nu + enu * (nu + w) - exp(enu * w + nu) - lgamma(enu)
-        ## S = 1 - pgamma(exp(enu*w+nu), enu, 1)
-        logS <- pgamma(exp(enu * w + nu), enu, 1, lower.tail = FALSE, log.p = TRUE)
-      }
-    )
-    list(logf = logf, logS = logS)
-  }
-
-  ## Score components: d(log f)/dw and d(log S)/dw
-  .score_w <- function(w, dist, nu) {
-    switch(dist,
-      weibull = {
-        ew <- exp(w)
-        dlogf <- 1 - ew
-        dlogS <- -ew
-      },
-      logistic = {
-        ew <- exp(w)
-        p <- 1 / (1 + ew)
-        dlogf <- 1 - 2 * ew * p
-        dlogS <- -ew * p
-      },
-      normal = {
-        dlogf <- -w
-        ## d(logS)/dw = -phi(w)/Phi(-w)
-        dlogS <- -dnorm(w) / pnorm(w, lower.tail = FALSE)
-      },
-      cauchy = {
-        dlogf <- -2 * w / (1 + w^2)
-        dlogS <- -1 / (pi * (1 + w^2)) / pmax(0.5 - atan(w)/pi, .Machine$double.eps)
-      },
-      gamma = {
-        enu <- exp(nu)
-        u <- exp(enu * w + nu)
-        dlogf <- enu * (1 - u)
-        ## d(logS)/dw = -f_gamma(u) * du/dw / S
-        ## du/dw = enu * u
-        dlogS <- -dgamma(u, enu, 1) * enu * u /
-                  pgamma(u, enu, 1, lower.tail = FALSE)
-      }
-    )
-    list(dlogf = dlogf, dlogS = dlogS)
-  }
-
-  ## PDF function
   pdf <- function(y, par, log = FALSE) {
-    mu <- par$mu
-    sigma <- par$sigma
-    log_sigma_eff <- log(sigma)
-    if (theta > 0) {
-      mu_c <- mu - mean(mu)
-      for (k in seq_len(theta)) {
-        log_sigma_eff <- log_sigma_eff + par[[paste0("theta", k)]] * mu_c^k
-      }
-    }
-    sigma_eff <- exp(log_sigma_eff)
-
-    ## Handle Surv objects
-    if (inherits(y, "Surv")) {
-      stype <- attr(y, "type")
-      if (stype == "right") {
-        logt <- log(y[, "time"])
-        status <- y[, "status"]
-        w <- (logt - mu) / sigma_eff
-        dens <- .log_densities(w, dist, nu)
-        ## uncensored: f(t) = f_w(w) / (t * sigma_eff)
-        ## log-likelihood = logf(w) - log(t) - log(sigma_eff) for events
-        ##                = logS(w) for right-censored
-        ll <- ifelse(status == 1,
-                     dens$logf - logt - log_sigma_eff,
-                     dens$logS)
-      } else if (stype == "counting") {
-        t0 <- y[, "start"]
-        logt <- log(y[, "stop"])
-        status <- y[, "status"]
-        w <- (logt - mu) / sigma_eff
-        dens <- .log_densities(w, dist, nu)
-        ll <- ifelse(status == 1,
-                     dens$logf - logt - log_sigma_eff,
-                     dens$logS)
-        ## Subtract left-truncation contribution
-        has_start <- t0 > 0
-        if (any(has_start)) {
-          w0 <- (log(t0[has_start]) - mu[has_start]) / sigma_eff[has_start]
-          dens0 <- .log_densities(w0, dist, nu)
-          ll[has_start] <- ll[has_start] - dens0$logS
-        }
-      } else {
-        stop("Only 'right' and 'counting' Surv types supported")
-      }
-    } else {
-      ## Non-Surv: treat as uncensored
-      logt <- log(y)
-      w <- (logt - mu) / sigma_eff
-      dens <- .log_densities(w, dist, nu)
-      ll <- dens$logf - logt - log_sigma_eff
-    }
-
+    state <- .aft_family_state(y, par, dist = dist, theta = theta,
+                               dist_nu = dist_nu, cure = cure,
+                               fixed_sigma = fixed_sigma)
+    ll <- state$ll
     if (log) ll else exp(ll)
   }
 
-  ## Score functions
   score <- list()
-
   score$mu <- function(y, par, ...) {
-    mu <- par$mu; sigma <- par$sigma
-    log_se <- log(sigma)
-    if (theta > 0) {
-      mu_c <- mu - mean(mu)
-      for (k in seq_len(theta)) log_se <- log_se + par[[paste0("theta", k)]] * mu_c^k
-    }
-    se <- exp(log_se)
-
-    if (inherits(y, "Surv")) {
-      stype <- attr(y, "type")
-      logt <- if (stype == "right") log(y[, "time"]) else log(y[, "stop"])
-      status <- if (stype == "right") y[, "status"] else y[, "status"]
-    } else {
-      logt <- log(y); status <- rep(1, length(y))
-    }
-
-    w <- (logt - mu) / se
-    sc <- .score_w(w, dist, nu)
-
-    ## d(ll)/d(mu) via chain rule
-    ## w = (logt - mu)/se, dw/dmu = -1/se
-    ## Also d(log_se)/dmu = sum_k theta_k * k * mu_c^(k-1)
-    dlogse_dmu <- 0
-    if (theta > 0) for (k in seq_len(theta)) dlogse_dmu <- dlogse_dmu + par[[paste0("theta", k)]] * k * mu_c^(k - 1)
-
-    ## For event: d/dmu [logf(w) - log(se)] = dlogf/dw * dw/dmu - dlogse/dmu
-    ##   dw/dmu = -1/se - w * dlogse_dmu
-    dw_dmu <- -1/se - w * dlogse_dmu
-
-    s <- ifelse(status == 1,
-                sc$dlogf * dw_dmu - dlogse_dmu,
-                sc$dlogS * dw_dmu)
-
-    ## Left truncation adjustment
-    if (inherits(y, "Surv") && attr(y, "type") == "counting") {
-      t0 <- y[, "start"]; has_start <- t0 > 0
-      if (any(has_start)) {
-        w0 <- (log(t0[has_start]) - mu[has_start]) / se[has_start]
-        sc0 <- .score_w(w0, dist, nu)
-        dw0_dmu <- -1/se[has_start] - w0 * dlogse_dmu[has_start]
-        s[has_start] <- s[has_start] - sc0$dlogS * dw0_dmu
-      }
-    }
-    s
+    .aft_score_parameter(y, par, target = "mu", dist = dist, theta = theta,
+                         dist_nu = dist_nu, cure = cure,
+                         fixed_sigma = fixed_sigma)
   }
 
-  score$sigma <- function(y, par, ...) {
-    mu <- par$mu; sigma <- par$sigma
-    log_se <- log(sigma)
-    if (theta > 0) {
-      mu_c <- mu - mean(mu)
-      for (k in seq_len(theta)) log_se <- log_se + par[[paste0("theta", k)]] * mu_c^k
+  if (!fixed_sigma) {
+    score$sigma <- function(y, par, ...) {
+      .aft_score_parameter(y, par, target = "sigma", dist = dist,
+                           theta = theta, dist_nu = dist_nu, cure = cure,
+                           fixed_sigma = fixed_sigma)
     }
-    se <- exp(log_se)
-
-    if (inherits(y, "Surv")) {
-      stype <- attr(y, "type")
-      logt <- if (stype == "right") log(y[, "time"]) else log(y[, "stop"])
-      status <- if (stype == "right") y[, "status"] else y[, "status"]
-    } else {
-      logt <- log(y); status <- rep(1, length(y))
-    }
-
-    w <- (logt - mu) / se
-    sc <- .score_w(w, dist, nu)
-
-    ## d(ll)/d(sigma) -- sigma has log link, so we need d/d(log(sigma))
-    ## d(log_se)/d(log(sigma)) = 1
-    ## dw/d(log(sigma)) = -w
-    s <- ifelse(status == 1,
-                sc$dlogf * (-w) - 1,
-                sc$dlogS * (-w))
-
-    ## Left truncation
-    if (inherits(y, "Surv") && attr(y, "type") == "counting") {
-      t0 <- y[, "start"]; has_start <- t0 > 0
-      if (any(has_start)) {
-        w0 <- (log(t0[has_start]) - mu[has_start]) / se[has_start]
-        sc0 <- .score_w(w0, dist, nu)
-        s[has_start] <- s[has_start] - sc0$dlogS * (-w0)
-      }
-    }
-    s
   }
 
-  ## Theta score functions
-  if (theta > 0) {
+  if (cure) {
+    score$nu <- function(y, par, ...) {
+      .aft_score_parameter(y, par, target = "nu", dist = dist, theta = theta,
+                           dist_nu = dist_nu, cure = TRUE,
+                           fixed_sigma = fixed_sigma)
+    }
+  }
+
+  if (theta > 0L) {
     for (kk in seq_len(theta)) {
       local({
         k <- kk
-        score[[paste0("theta", k)]] <<- function(y, par, ...) {
-          mu <- par$mu; sigma <- par$sigma
-          log_se <- log(sigma)
-          mu_c <- mu - mean(mu)
-          if (theta > 0) for (j in seq_len(theta)) log_se <- log_se + par[[paste0("theta", j)]] * mu_c^j
-          se <- exp(log_se)
-
-          if (inherits(y, "Surv")) {
-            stype <- attr(y, "type")
-            logt <- if (stype == "right") log(y[, "time"]) else log(y[, "stop"])
-            status <- if (stype == "right") y[, "status"] else y[, "status"]
-          } else {
-            logt <- log(y); status <- rep(1, length(y))
-          }
-
-          w <- (logt - mu) / se
-          sc <- .score_w(w, dist, nu)
-
-          ## d(log_se)/d(theta_k) = mu_c^k
-          ## dw/d(theta_k) = -w * mu_c^k
-          mupow <- mu_c^k
-
-          s <- ifelse(status == 1,
-                      sc$dlogf * (-w * mupow) - mupow,
-                      sc$dlogS * (-w * mupow))
-
-          if (inherits(y, "Surv") && attr(y, "type") == "counting") {
-            t0 <- y[, "start"]; has_start <- t0 > 0
-            if (any(has_start)) {
-              w0 <- (log(t0[has_start]) - mu[has_start]) / se[has_start]
-              sc0 <- .score_w(w0, dist, nu)
-              s[has_start] <- s[has_start] - sc0$dlogS * (-w0 * mupow[has_start])
-            }
-          }
-          s
+        name <- paste0("theta", k)
+        score[[name]] <<- function(y, par, ...) {
+          .aft_score_parameter(y, par, target = name, dist = dist,
+                               theta = theta, dist_nu = dist_nu,
+                               cure = cure, fixed_sigma = fixed_sigma)
         }
       })
     }
   }
 
-  ## Build family
   fam <- list(
-    family = paste0("AFT_", dist),
+    family = .aft_family_name(dist, cure = cure, fixed_sigma = fixed_sigma),
     names = par_names,
     links = par_links,
     pdf = pdf,
     score = score
   )
 
-  ## Initialize
   fam$initialize <- list(
     mu = function(y, ...) {
-      if (inherits(y, "Surv")) {
-        logt <- if (attr(y, "type") == "right") log(y[, "time"]) else log(y[, "stop"])
-      } else logt <- log(y)
-      rep(mean(logt), length(logt))
-    },
-    sigma = function(y, ...) {
-      if (inherits(y, "Surv")) {
-        logt <- if (attr(y, "type") == "right") log(y[, "time"]) else log(y[, "stop"])
-      } else logt <- log(y)
-      rep(sd(logt), length(logt))
+      resp <- .aft_response_parts(y)
+      rep(mean(resp$logt), length(resp$logt))
     }
   )
-  if (theta > 0) {
+  if (!fixed_sigma) {
+    fam$initialize$sigma <- function(y, ...) {
+      resp <- .aft_response_parts(y)
+      rep(stats::sd(resp$logt), length(resp$logt))
+    }
+  }
+  if (cure) {
+    fam$initialize$nu <- function(y, ...) {
+      resp <- .aft_response_parts(y)
+      censor_frac <- mean(resp$status == 0)
+      p0 <- min(0.5, max(0.05, censor_frac / 2))
+      rep(p0, length(resp$logt))
+    }
+  }
+  if (theta > 0L) {
     for (k in seq_len(theta)) {
       fam$initialize[[paste0("theta", k)]] <- function(y, ...) {
         rep(0, NROW(y))
@@ -364,11 +221,337 @@ AFT_Gamma <- function(theta = 0L, nu = 1) {
     }
   }
 
-  ## Valid response
   fam$valid.response <- function(x) {
     inherits(x, "Surv") || (is.numeric(x) && all(x > 0))
   }
 
+  fam$cure_probability <- function(par) {
+    if (!cure) {
+      stop("Cure probability is only defined for cure-model families",
+           call. = FALSE)
+    }
+    .aft_cure_probability(par$nu)
+  }
+
+  fam$survival <- function(times, par) {
+    par_grid <- .aft_expand_parameters(par, length(times))
+    state <- .aft_family_state(rep(times, each = length(par$mu)), par_grid,
+                               dist = dist, theta = theta, dist_nu = dist_nu,
+                               cure = cure, fixed_sigma = fixed_sigma,
+                               y_is_time = TRUE)
+    S <- matrix(state$survival, nrow = length(par$mu), byrow = FALSE)
+    if (length(par$mu) == 1L) as.numeric(S) else S
+  }
+
   class(fam) <- "gamlss2.family"
   fam
+}
+
+.aft_family_name <- function(dist, cure = FALSE, fixed_sigma = FALSE) {
+  if (fixed_sigma) {
+    return(if (cure) "Cure_Exponential" else "AFT_Exponential")
+  }
+  dist_label <- switch(
+    dist,
+    weibull = "Weibull",
+    logistic = "Logistic",
+    normal = "Normal",
+    cauchy = "Cauchy",
+    gamma = "Gamma",
+    stop("Unsupported distribution: ", dist, call. = FALSE)
+  )
+  paste0(if (cure) "Cure_" else "AFT_", dist_label)
+}
+
+.aft_response_parts <- function(y) {
+  if (inherits(y, "Surv")) {
+    stype <- attr(y, "type")
+    if (stype == "right") {
+      list(
+        logt = log(y[, "time"]),
+        status = y[, "status"],
+        t0 = rep(0, nrow(y)),
+        has_start = rep(FALSE, nrow(y)),
+        is_counting = FALSE
+      )
+    } else if (stype == "counting") {
+      t0 <- y[, "start"]
+      list(
+        logt = log(y[, "stop"]),
+        status = y[, "status"],
+        t0 = t0,
+        has_start = t0 > 0,
+        is_counting = TRUE
+      )
+    } else {
+      stop("Only 'right' and 'counting' Surv types are supported",
+           call. = FALSE)
+    }
+  } else {
+    list(
+      logt = log(y),
+      status = rep(1, length(y)),
+      t0 = rep(0, length(y)),
+      has_start = rep(FALSE, length(y)),
+      is_counting = FALSE
+    )
+  }
+}
+
+.aft_effective_scale <- function(mu, par, theta, fixed_sigma = FALSE) {
+  n <- length(mu)
+  if (fixed_sigma) {
+    return(list(
+      log_sigma_eff = rep(0, n),
+      sigma_eff = rep(1, n),
+      mu_c = rep(0, n)
+    ))
+  }
+
+  log_sigma_eff <- log(par$sigma)
+  mu_c <- mu - mean(mu)
+  if (theta > 0L) {
+    for (k in seq_len(theta)) {
+      log_sigma_eff <- log_sigma_eff + par[[paste0("theta", k)]] * mu_c^k
+    }
+  }
+
+  list(
+    log_sigma_eff = log_sigma_eff,
+    sigma_eff = exp(log_sigma_eff),
+    mu_c = mu_c
+  )
+}
+
+.aft_baseline_quantities <- function(w, dist, dist_nu) {
+  out <- switch(dist,
+    weibull = {
+      ew <- exp(w)
+      list(
+        logf = w - ew,
+        logS = -ew,
+        dlogf = 1 - ew,
+        dlogS = -ew
+      )
+    },
+    logistic = {
+      ew <- exp(w)
+      p <- 1 / (1 + ew)
+      list(
+        logf = w - 2 * log1p(ew),
+        logS = -log1p(ew),
+        dlogf = 1 - 2 * ew * p,
+        dlogS = -ew * p
+      )
+    },
+    normal = {
+      list(
+        logf = stats::dnorm(w, log = TRUE),
+        logS = stats::pnorm(w, lower.tail = FALSE, log.p = TRUE),
+        dlogf = -w,
+        dlogS = -stats::dnorm(w) / stats::pnorm(w, lower.tail = FALSE)
+      )
+    },
+    cauchy = {
+      surv <- pmax(0.5 - atan(w) / pi, .Machine$double.eps)
+      list(
+        logf = -log(pi) - log1p(w^2),
+        logS = log(surv),
+        dlogf = -2 * w / (1 + w^2),
+        dlogS = -1 / (pi * (1 + w^2) * surv)
+      )
+    },
+    gamma = {
+      enu <- exp(dist_nu)
+      u <- exp(enu * w + dist_nu)
+      surv <- stats::pgamma(u, enu, 1, lower.tail = FALSE)
+      list(
+        logf = dist_nu + enu * (dist_nu + w) - u - lgamma(enu),
+        logS = stats::pgamma(u, enu, 1, lower.tail = FALSE, log.p = TRUE),
+        dlogf = enu * (1 - u),
+        dlogS = -stats::dgamma(u, enu, 1) * enu * u / surv
+      )
+    },
+    stop("Unsupported distribution: ", dist, call. = FALSE)
+  )
+
+  out$S <- exp(out$logS)
+  out$F <- 1 - out$S
+  out
+}
+
+.aft_parameter_derivatives <- function(target, mu, sigma_eff, w, mu_c, par,
+                                       theta, fixed_sigma = FALSE) {
+  if (identical(target, "mu")) {
+    dlogse <- rep(0, length(mu))
+    if (!fixed_sigma && theta > 0L) {
+      for (k in seq_len(theta)) {
+        dlogse <- dlogse + par[[paste0("theta", k)]] * k * mu_c^(k - 1)
+      }
+    }
+    return(list(dw = -1 / sigma_eff - w * dlogse, dlogse = dlogse))
+  }
+
+  if (identical(target, "sigma")) {
+    if (fixed_sigma) {
+      stop("sigma is fixed for this family", call. = FALSE)
+    }
+    return(list(dw = -w, dlogse = rep(1, length(mu))))
+  }
+
+  if (startsWith(target, "theta")) {
+    k <- as.integer(sub("^theta", "", target))
+    mupow <- mu_c^k
+    return(list(dw = -w * mupow, dlogse = mupow))
+  }
+
+  stop("Unsupported target parameter: ", target, call. = FALSE)
+}
+
+.aft_cure_probability <- function(p) {
+  pmin(pmax(p, .Machine$double.eps), 1 - .Machine$double.eps)
+}
+
+.aft_cure_tau <- function(p) {
+  -log(.aft_cure_probability(p))
+}
+
+.aft_index_parameter <- function(x, idx) {
+  if (length(x) == 1L) {
+    rep(x, length(idx))
+  } else {
+    x[idx]
+  }
+}
+
+.aft_expand_parameters <- function(par, times) {
+  lapply(par, rep, times = times)
+}
+
+.aft_family_state <- function(y, par, dist, theta, dist_nu, cure,
+                              fixed_sigma = FALSE, y_is_time = FALSE) {
+  mu <- par$mu
+  scale_state <- .aft_effective_scale(mu, par, theta, fixed_sigma = fixed_sigma)
+
+  if (y_is_time) {
+    resp <- list(
+      logt = log(y),
+      status = rep(0, length(y)),
+      t0 = rep(0, length(y)),
+      has_start = rep(FALSE, length(y)),
+      is_counting = FALSE
+    )
+  } else {
+    resp <- .aft_response_parts(y)
+  }
+
+  w <- (resp$logt - mu) / scale_state$sigma_eff
+  base <- .aft_baseline_quantities(w, dist = dist, dist_nu = dist_nu)
+  base_event_ll <- base$logf - resp$logt - scale_state$log_sigma_eff
+
+  if (cure) {
+    p <- .aft_cure_probability(par$nu)
+    tau <- .aft_cure_tau(p)
+    ll <- ifelse(resp$status == 1,
+                 log(tau) + base_event_ll - tau * base$F,
+                 -tau * base$F)
+    survival <- exp(-tau * base$F)
+  } else {
+    ll <- ifelse(resp$status == 1, base_event_ll, base$logS)
+    survival <- base$S
+  }
+
+  if (resp$is_counting && any(resp$has_start)) {
+    w0 <- (log(resp$t0[resp$has_start]) - mu[resp$has_start]) /
+      scale_state$sigma_eff[resp$has_start]
+    base0 <- .aft_baseline_quantities(w0, dist = dist, dist_nu = dist_nu)
+    if (cure) {
+      tau <- .aft_cure_tau(par$nu[resp$has_start])
+      ll[resp$has_start] <- ll[resp$has_start] + tau * base0$F
+    } else {
+      ll[resp$has_start] <- ll[resp$has_start] - base0$logS
+    }
+  }
+
+  list(
+    ll = ll,
+    survival = survival,
+    mu = mu,
+    sigma_eff = scale_state$sigma_eff,
+    log_sigma_eff = scale_state$log_sigma_eff,
+    mu_c = scale_state$mu_c,
+    resp = resp,
+    base = base
+  )
+}
+
+.aft_score_parameter <- function(y, par, target, dist, theta, dist_nu, cure,
+                                 fixed_sigma = FALSE) {
+  state <- .aft_family_state(y, par, dist = dist, theta = theta,
+                             dist_nu = dist_nu, cure = cure,
+                             fixed_sigma = fixed_sigma)
+
+  if (identical(target, "nu")) {
+    p <- .aft_cure_probability(par$nu)
+    tau <- .aft_cure_tau(p)
+    s <- ifelse(state$resp$status == 1,
+                -(1 - p) / tau + (1 - p) * state$base$F,
+                (1 - p) * state$base$F)
+    if (state$resp$is_counting && any(state$resp$has_start)) {
+      has_start <- state$resp$has_start
+      w0 <- (log(state$resp$t0[has_start]) - state$mu[has_start]) /
+        state$sigma_eff[has_start]
+      base0 <- .aft_baseline_quantities(w0, dist = dist, dist_nu = dist_nu)
+      s[has_start] <- s[has_start] - (1 - p[has_start]) * base0$F
+    }
+    return(s)
+  }
+
+  deriv <- .aft_parameter_derivatives(
+    target = target,
+    mu = state$mu,
+    sigma_eff = state$sigma_eff,
+    w = (state$resp$logt - state$mu) / state$sigma_eff,
+    mu_c = state$mu_c,
+    par = par,
+    theta = theta,
+    fixed_sigma = fixed_sigma
+  )
+
+  event_score <- state$base$dlogf * deriv$dw - deriv$dlogse
+  surv_score <- state$base$dlogS * deriv$dw
+
+  if (cure) {
+    tau <- .aft_cure_tau(par$nu)
+    s <- ifelse(state$resp$status == 1, event_score, 0) +
+      tau * state$base$S * surv_score
+  } else {
+    s <- ifelse(state$resp$status == 1, event_score, surv_score)
+  }
+
+  if (state$resp$is_counting && any(state$resp$has_start)) {
+    has_start <- state$resp$has_start
+    w0 <- (log(state$resp$t0[has_start]) - state$mu[has_start]) /
+      state$sigma_eff[has_start]
+    base0 <- .aft_baseline_quantities(w0, dist = dist, dist_nu = dist_nu)
+    deriv0 <- .aft_parameter_derivatives(
+      target = target,
+      mu = state$mu[has_start],
+      sigma_eff = state$sigma_eff[has_start],
+      w = w0,
+      mu_c = state$mu_c[has_start],
+      par = lapply(par, .aft_index_parameter, idx = has_start),
+      theta = theta,
+      fixed_sigma = fixed_sigma
+    )
+    surv_score0 <- base0$dlogS * deriv0$dw
+    if (cure) {
+      tau0 <- .aft_cure_tau(par$nu[has_start])
+      s[has_start] <- s[has_start] - tau0 * base0$S * surv_score0
+    } else {
+      s[has_start] <- s[has_start] - surv_score0
+    }
+  }
+
+  s
 }

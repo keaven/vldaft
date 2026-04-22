@@ -44,6 +44,13 @@ int normal_dist(int event, double u, double *f);
 int cauchy_dist(int event, double x, double *f);
 int ac_tpar8   (int m, double *beta, double *db, double *ddb, double *ll1);
 
+/* Function prototypes - vldaft_cure_eval.c */
+SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
+                      SEXP s_start_col, SEXP s_t0_col,
+                      SEXP s_loc_cols, SEXP s_scale_cols, SEXP s_cure_cols,
+                      SEXP s_theta, SEXP s_mlo1, SEXP s_dist, SEXP s_base_nu,
+                      SEXP s_par, SEXP s_fixed_sigma);
+
 /* Function prototypes - dataio8.c */
 double *getrec(void);
 void    zrewind(void);

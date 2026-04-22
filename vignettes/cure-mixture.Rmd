@@ -1,0 +1,247 @@
+---
+title: "Poisson-Mixture Cure Families for vldaft"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Poisson-Mixture Cure Families for vldaft}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+library(vldaft)
+library(gglite)
+```
+
+## Motivation
+
+The baseline `vldaft` model is already useful for prediction because it
+directly models subject-specific survival curves. What it cannot represent
+is a **survival plateau**: long-run survival that levels off above zero.
+
+For indications with a plausible cure fraction, the package now provides
+`gamlss2` family constructors that wrap the existing accelerated failure
+time baselines in a **Poisson-mixture cure model**. The idea is to keep the
+baseline AFT machinery exactly as before, but replace the survival function
+\(S_0(t)\) with
+
+\[
+S(t) = \exp\{-\tau (1 - S_0(t))\},
+\qquad
+\tau = -\log(p),
+\qquad
+p = \operatorname{logit}^{-1}(\nu).
+\]
+
+Here \(p\) is the cure probability and \(\nu\) is modeled with a standard
+logit link.
+
+## Available family constructors
+
+The current implementation keeps the **architecture generic** over the
+supported baseline survival distributions:
+
+- `Cure_Weibull(theta = 0L)`
+- `Cure_Logistic(theta = 0L)`
+- `Cure_Normal(theta = 0L)`
+- `Cure_Cauchy(theta = 0L)`
+- `Cure_Gamma(theta = 0L, base_nu = 1)`
+- `Cure_Exponential()`
+
+For the cure families, the parameter blocks are:
+
+- `mu`: location / linear predictor for the baseline AFT model
+- `sigma`: log-scale parameter (except for `Cure_Exponential()`, where
+  \(\sigma \equiv 1\))
+- `nu`: cure probability on the response scale, with a logit link
+- `theta1`, `theta2`, ...: optional VLDAFT coupling terms linking
+  `log(sigma)` to `mu`
+
+So a `gamlss2` call for a one-theta cure Weibull model uses the formula
+layout `mu | sigma | nu | theta1`.
+
+```{r gamlss2-cure-example, eval = FALSE}
+library(gamlss2)
+library(survival)
+
+fit <- gamlss2(
+  Surv(time, status) ~ x1 + x2 | 1 | x1 + x2 | 1,
+  data = my_data,
+  family = Cure_Weibull(theta = 1)
+)
+```
+
+## Likelihood
+
+Let \(F_0(t) = 1 - S_0(t)\) denote the baseline CDF, and let
+
+\[
+w_i = \frac{\log t_i - \mu_i}{\sigma_{i,\mathrm{eff}}}
+\]
+
+be the standardized AFT residual, with the same `theta`-polynomial
+coupling used by the non-cure families:
+
+\[
+\log(\sigma_{i,\mathrm{eff}})
+= \log(\sigma_i) + \sum_{k=1}^{K} \theta_k (\mu_i - \bar{\mu})^k.
+\]
+
+For an observed event, the cure-model density is
+
+\[
+f(t_i) = \tau_i f_0(t_i) \exp\{-\tau_i F_0(t_i)\},
+\]
+
+so the log-likelihood contribution is
+
+\[
+\ell_i^{(\mathrm{event})}
+= \log(\tau_i) + \log f_0(t_i) - \tau_i F_0(t_i).
+\]
+
+For a right-censored observation,
+
+\[
+\ell_i^{(\mathrm{cens})} = -\tau_i F_0(t_i).
+\]
+
+For left truncation at \(t_{0i}\), we condition on survival to entry and
+add
+
+\[
+\tau_i F_0(t_{0i})
+\]
+
+to the contribution above.
+
+## First partials
+
+Let \(\alpha\) be any baseline parameter block (`mu`, `sigma`, `theta1`,
+...). Because
+
+\[
+\frac{\partial F_0}{\partial \alpha}
+  = -S_0 \frac{\partial \log S_0}{\partial \alpha},
+\]
+
+the cure-model score takes a simple form:
+
+\[
+\frac{\partial \ell_i}{\partial \alpha}
+= I(\delta_i = 1)\frac{\partial \log f_0(t_i)}{\partial \alpha}
+  \tau_i S_0(t_i)\frac{\partial \log S_0(t_i)}{\partial \alpha},
+\]
+
+with the left-truncation correction
+
+\[
+-\tau_i S_0(t_{0i})
+\frac{\partial \log S_0(t_{0i})}{\partial \alpha}.
+\]
+
+For the cure block itself, the implementation uses \(\nu\) as the additive
+predictor with a logit link, so \(p = \operatorname{logit}^{-1}(\nu)\) and
+
+\[
+\frac{\partial \tau}{\partial \nu} = -(1 - p).
+\]
+
+Therefore
+
+\[
+\frac{\partial \ell_i^{(\mathrm{event})}}{\partial \nu}
+= (1-p_i)\left(F_0(t_i) - \frac{1}{\tau_i}\right),
+\qquad
+\frac{\partial \ell_i^{(\mathrm{cens})}}{\partial \nu}
+= (1-p_i)F_0(t_i),
+\]
+
+with a left-truncation subtraction of \((1-p_i)F_0(t_{0i})\).
+
+## Second partials
+
+The full Hessian is algebraically messy but follows directly from the score
+expressions above. For the one-dimensional cure block, differentiating once
+more gives
+
+\[
+\frac{\partial^2 \ell_i^{(\mathrm{event})}}{\partial \nu^2}
+= -p_i(1-p_i)\left(F_0(t_i) - \frac{1}{\tau_i}\right)
+   \frac{-(1-p_i)^2}{\tau_i^2},
+\]
+
+and for a censored observation,
+
+\[
+\frac{\partial^2 \ell_i^{(\mathrm{cens})}}{\partial \nu^2}
+= -p_i(1-p_i)F_0(t_i),
+\]
+
+again with the obvious left-truncation correction. The current
+implementation exposes **analytic scores**; a fully analytic Hessian for
+every parameter block is a natural next extension if optimization speed
+becomes limiting.
+
+## A small simulation
+
+The code below simulates from an intercept-only cure exponential model and
+then shows the matching family constructor.
+
+```{r cure-sim}
+set.seed(21)
+n <- 300
+mu_true <- 1.3
+p_true <- 0.25
+tau <- -log(p_true)
+u <- runif(n)
+has_event <- u <= (1 - p_true)
+t_event <- rep(Inf, n)
+f0 <- -log1p(-u[has_event]) / tau
+t_event[has_event] <- exp(mu_true + log(-log(1 - f0)))
+c_time <- rexp(n, rate = 0.02)
+time <- pmin(t_event, c_time)
+status <- as.integer(t_event <= c_time)
+
+mean(status == 0)
+```
+
+```{r cure-exp-family}
+fam <- Cure_Exponential()
+par <- list(
+  mu = rep(mu_true, 3),
+  nu = rep(p_true, 3)
+)
+
+fam$cure_probability(par)
+fam$survival(c(1, 2, 5), par)
+```
+
+```{r cure-exp-plot}
+t_grid <- seq(0.1, 20, length.out = 200)
+plot_df <- data.frame(
+  time = t_grid,
+  survival = fam$survival(t_grid, list(mu = mu_true, nu = p_true))
+)
+
+g2(plot_df, survival ~ time, title = "Cure exponential survival curve") |>
+  mark_line() |>
+  axis_x(title = "Time") |>
+  axis_y(title = "Survival probability")
+```
+
+## Notes
+
+- The cure-layer architecture is distribution-generic, but initial
+  validation focused on the Weibull / exponential cases.
+- In this first pass, `nu` is a **linear regression block only**. A future
+  extension could let `nu` depend on low-order powers of `mu`, mirroring the
+  VLDAFT coupling already used for `sigma`.
+- The Poisson-mixture cure model does **not** collapse to the plain baseline
+  family by simply sending \(p \to 0\); that common intuition is incorrect
+  for this construction, so tests in this package focus on score
+  consistency, left-truncation handling, and parameter recovery instead.

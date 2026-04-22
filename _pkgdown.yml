@@ -38,12 +38,14 @@ reference:
   desc: Family constructors for use inside the gamlss2 framework.
   contents:
   - starts_with("AFT_")
+  - starts_with("Cure_")
 
 articles:
 - title: Methodology
   navbar: ~
   contents:
   - anderson1991
+  - cure-mixture
 - title: Reference
   contents:
   - survival-explorer

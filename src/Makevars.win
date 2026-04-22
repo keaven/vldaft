@@ -4,7 +4,7 @@ LIBDIR     = $(TARGET_DIR)/$(TARGET)/release
 STATLIB    = $(LIBDIR)/libvldaft.a
 PKG_LIBS   = -L$(LIBDIR) -lvldaft -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll
 
-C_SOURCES = init.c vldaft_fit.c dataio8.c loscreg8.c nrmod.c matrix.c
+C_SOURCES = init.c vldaft_fit.c vldaft_cure_eval.c dataio8.c loscreg8.c nrmod.c matrix.c
 OBJECTS   = $(C_SOURCES:.c=.o)
 
 all: $(SHLIB)

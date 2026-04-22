@@ -11,6 +11,7 @@ vldaft(
   theta = 0L,
   theta_vars = NULL,
   nu = 1,
+  cure = FALSE,
   init = NULL,
   control = list(),
   adjust = TRUE,
@@ -40,6 +41,11 @@ for \eqn{\sigma}). Default \code{NULL} means all location covariates.}
 
 \item{nu}{Numeric, shape parameter for the gamma distribution (only used
 when \code{dist = "gamma"}).}
+
+\item{cure}{Logical; if \code{TRUE}, fit the Poisson-mixture cure-model
+extension with an additional cure-fraction regression block. When the
+formula contains a third \code{|}-separated block, \code{cure = TRUE}
+is implied.}
 
 \item{init}{Numeric vector of initial parameter values, or \code{NULL}
 for zeros.}
