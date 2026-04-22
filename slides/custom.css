@@ -1,0 +1,66 @@
+/* Custom styling for the VLDAFT methodology deck. */
+
+/* Apply Quarto's `.scrollable` slide behaviour to every slide so that
+   long content scrolls inside the viewport instead of being clipped.
+   This mirrors what `## Title {.scrollable}` does, but globally. */
+.reveal .slides > section:not(.stack),
+.reveal .slides > section.stack > section {
+  height: 100% !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* Wrap long URLs / inline code so the references slide does not need
+   horizontal scrolling. */
+.reveal .slides section,
+.reveal .slides section a,
+.reveal .slides section code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Keep the page-number badge visible above scrolling slide content.
+   Use position: fixed so it sits in the viewport corner regardless of
+   how reveal sizes the slide section, and use very high specificity
+   so theme overrides cannot hide it. */
+html body .reveal .slide-number,
+html body .reveal aside.slide-number,
+html body .reveal div.slide-number,
+html body div.reveal-viewport .slide-number {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  position: fixed !important;
+  bottom: 10px !important;
+  right: 14px !important;
+  top: auto !important;
+  left: auto !important;
+  z-index: 99999 !important;
+  background: rgba(0, 0, 0, 0.65) !important;
+  color: #fff !important;
+  padding: 4px 9px !important;
+  border-radius: 4px !important;
+  font-size: 14px !important;
+  line-height: 1 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  pointer-events: none;
+}
+
+/* Slim scrollbar (WebKit / Blink). */
+.reveal .slides section::-webkit-scrollbar {
+  width: 8px;
+}
+.reveal .slides section::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+}
+
+/* Smaller tables fit better on slides. */
+.small-table table {
+  font-size: 0.7em;
+}
+
+/* Cap code-block height so very long chunks scroll within the slide. */
+.reveal section pre code {
+  max-height: 480px;
+}

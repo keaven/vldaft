@@ -17,4 +17,5 @@ src/*.bak
 # Rendered vignette HTML (rebuilt on install)
 vignettes/*.html
 src/rust/target/
+src/.cargo/
 docs/

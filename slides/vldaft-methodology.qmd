@@ -6,16 +6,21 @@ date: today
 format:
   revealjs:
     theme: simple
-    slide-number: true
+    slide-number: c/t
+    show-slide-number: all
     chalkboard: false
     incremental: false
+    smaller: true
+    width: 1280
+    height: 900
     fig-width: 8
-    fig-height: 4.5
+    fig-height: 4.2
     fig-align: center
     code-line-numbers: false
-    css: |
-      .small-table table { font-size: 0.7em; }
-      .reveal section pre code { max-height: 480px; }
+    auto-stretch: false
+    center: false
+    embed-resources: true
+    css: custom.css
 execute:
   echo: true
   warning: false
@@ -25,23 +30,32 @@ execute:
 ## What this talk is about
 
 - A simple, flexible parametric **regression** model for survival data,
-  in the spirit of `survreg()` / `gamlss2`, but with one extra twist.
+  in the spirit of `survreg()` / `gamlss2`, with one twist.
 - The twist: let the **dispersion** depend on the **location** through
   a low-order polynomial — Anderson (1991)'s VLDAFT model.
-- Why we care: a single fitted model gives you
-    * per-subject **risk predictions** at any horizon,
-    * smooth **survival curves** for sub-populations,
-    * scalar summaries (median, RMST, expected QALYs) for
-      **health-economic comparisons**,
-  and it gracefully accommodates **non-proportional hazards**.
-- Today: methodology, the legacy C → modern R+Rust port, the
-  `gamlss2` extension, and a small live demo.
+- The model is *small*: typically 2 (location) + 1 (dispersion intercept)
+  + 1 (θ) parameters more than a Cox model.
 
 ::: {.notes}
-The selling point of this model is that it is *small*: typically 2 (location)
-+ 1 (intercept of dispersion) + 1 (theta) parameters more than a Cox model.
-That makes it well-suited for prediction in moderately sized cohorts.
+That parsimony is what makes VLDAFT well-suited for prediction in
+moderately sized cohorts.
 :::
+
+---
+
+## What one VLDAFT fit gives you
+
+A single fitted model delivers:
+
+- per-subject **risk predictions** at any horizon,
+- smooth **survival curves** for sub-populations,
+- scalar summaries (median, RMST, expected QALYs) for
+  **health-economic comparisons**,
+- graceful handling of **non-proportional hazards** —
+  no time-varying coefficients required.
+
+Today: methodology → legacy C → modern R + Rust port →
+`gamlss2` extension → a small live demo.
 
 ---
 
@@ -133,8 +147,11 @@ A *single scalar* lets the hazard ratio between any two subjects
 
 ```{r theta-illustration}
 #| label: fig-theta
-#| fig-cap: "Hazard ratio (high vs low risk) over time, Weibull errors. With θ₁ = 0 the ratio is constant; with θ₁ < 0 the hazards converge."
+#| fig-cap: "Ratio of instantaneous hazard rates h(t) (low-μ subject ÷ high-μ subject), Weibull errors. With θ₁ = 0 the ratio is constant (proportional hazards); with θ₁ < 0 the hazards converge."
 #| code-fold: true
+#| fig-width: 6.5
+#| fig-height: 3.4
+#| out-width: "78%"
 library(ggplot2)
 weibull_hazard <- function(t, mu, sigma) {
   alpha <- 1 / sigma
@@ -157,9 +174,10 @@ df <- do.call(rbind, lapply(c(0, -0.20, -0.40, 0.20), make_curve))
 ggplot(df, aes(t, hr, colour = theta1)) +
   geom_line(linewidth = 1) +
   scale_y_log10() +
-  labs(x = "Time", y = "Hazard ratio (low-mu vs high-mu)",
+  labs(x = "Time",
+       y = "Hazard-rate ratio  h_low(t) / h_high(t)",
        colour = NULL) +
-  theme_minimal(base_size = 14)
+  theme_minimal(base_size = 12)
 ```
 
 ---
@@ -204,38 +222,48 @@ What we kept, what we cut, and what we fixed on the next slide.
 
 ---
 
-## What we changed (C side)
+## What we removed (C side)
 
-| Change                                                 | Why                                            |
-|--------------------------------------------------------|------------------------------------------------|
-| Removed `bw.c`, `apolyth.c`, `loscpar.c`, `entrypoint.c` | Not exposed to R; deleting them halved the C surface area. |
-| Removed `fopen`/`fprintf`/influence-file I/O           | CRAN policy, also unused.                      |
-| `float *x` → `double *x` everywhere                     | Removed a ~1e-7 floor on parameter accuracy.   |
-| `MACHEPS = 3e-39` → `DBL_EPSILON`                      | The old constant could underflow `cholmod`.    |
-| `R_alloc` for the design matrix                        | No more `malloc`/`free`, no leak risk.         |
-| `MAXCOV = 30` cap enforced at the R boundary           | No more silent stack-buffer overflow.          |
-| Single `vldaft_fit` SEXP entry registered in `init.c`  | Standard R native-routines registration.       |
-| Added `Makevars.win` and an R-CMD-check workflow       | Builds + checks on Linux, macOS, Windows.      |
+| Change                                                   | Why                                            |
+|----------------------------------------------------------|------------------------------------------------|
+| Removed `bw.c`, `apolyth.c`, `loscpar.c`, `entrypoint.c` | Not exposed to R; halved the C surface area.   |
+| Removed `fopen`/`fprintf`/influence-file I/O             | CRAN policy, also unused.                      |
+| Removed C globals; one `vldaft_fit` SEXP entry           | Reentrant-safe; standard `init.c` registration.|
 
-Net effect: **same algorithm**, ~1700 fewer lines of C, and double-precision
-end-to-end.
+Result so far: **~1700 fewer lines of C**, no file I/O, no globals.
 
 ---
 
-## Translation to Rust — for experimentation
+## What we fixed (C side)
 
-Why mirror the engine in Rust at all?
+| Change                                              | Why                                           |
+|-----------------------------------------------------|-----------------------------------------------|
+| `float *x` → `double *x` everywhere                 | Removed a ~1e-7 floor on parameter accuracy. |
+| `MACHEPS = 3e-39` → `DBL_EPSILON`                   | Old constant could underflow Cholesky.        |
+| `R_alloc` for design matrix and scratch buffers     | No more `malloc`/`free`, no leak risk.        |
+| `MAXCOV = 30` cap enforced at the R boundary        | Closes a silent stack-buffer overflow.        |
+| `Makevars.win` + R-CMD-check workflow               | Builds + checks on Linux, macOS, Windows.     |
+
+Net: **same algorithm**, double-precision end-to-end, CRAN-clean.
+
+---
+
+## Why translate to Rust?
 
 1. **Refactoring safety.** Rust's borrow checker turned the C globals
-   into a single `ModelState` struct; we now know what `ac_tpar8`
-   touches.
+   into a single `ModelState` struct; we now know exactly what
+   `ac_tpar8` touches.
 2. **Reference implementation.** Two independent ports running on the
-   same data is a free regression test (see
-   `tests/testthat/test-backend-parity.R`).
+   same data give a free regression test
+   (`tests/testthat/test-backend-parity.R`).
 3. **Easy to fork-and-experiment.** Adding a new error distribution or
    a different coupling term is a 30-line patch in
-   `src/rust/src/distributions.rs` or `src/rust/src/model.rs`,
-   without recompiling the rest of R.
+   `src/rust/src/distributions.rs` or `src/rust/src/model.rs` —
+   no Makefile gymnastics.
+
+---
+
+## C ⇄ Rust parity check
 
 ```r
 fit_c <- vldaft(Surv(time, status) ~ x1 + x2, data = d, backend = "c")
@@ -243,10 +271,14 @@ fit_r <- vldaft(Surv(time, status) ~ x1 + x2, data = d, backend = "rust")
 all.equal(coef(fit_c), coef(fit_r))   # TRUE to ~1e-8
 ```
 
+Because both engines now use `f64` throughout, the test passes to the
+last few bits. Before the `float → double` cleanup the two backends
+differed by ~1e-7 on the original Anderson 1991 data.
+
 ::: {.notes}
-Because both the C and Rust engines now use f64 throughout, the parity
-test passes to the last few bits.  Before the float→double cleanup the
-two backends differed by ~1e-7 on the Framingham data.
+The parity tests in `tests/testthat/test-backend-parity.R` loosen the
+tolerance for normal/cauchy errors only, where R's `pnorm` and
+`libm::erfc` differ in the deep tails.
 :::
 
 ---
@@ -368,7 +400,7 @@ library(ggplot2)
 weibull_S <- function(t, mu, sigma) {
   exp(-exp((log(t) - mu) / sigma))
 }
-t_grid <- seq(1, 200, length.out = 300)
+t_grid <- seq(0.1, 24, length.out = 300)
 mu_low  <- 2.0 + 0.6 * 1.0 - 0.4 * 0
 mu_high <- 2.0 + 0.6 * (-1.0) - 0.4 * 1
 mubar   <- 2.0
@@ -384,7 +416,11 @@ df <- rbind(make_panel(0.0), make_panel(-0.30))
 df$linetype <- ifelse(df$theta1 == 0, "constant sigma (theta1 = 0)",
                                        "VLDAFT (theta1 = -0.30)")
 ggplot(df, aes(t, S, colour = group, linetype = linetype)) +
+  geom_vline(xintercept = c(6, 12, 18, 24),
+             colour = "grey70", linetype = "dotted", linewidth = 0.4) +
   geom_line(linewidth = 1) +
+  scale_x_continuous(limits = c(0, 24), breaks = c(0, 6, 12, 18, 24),
+                     expand = expansion(mult = c(0, 0))) +
   labs(x = "Time", y = "Predicted survival", colour = NULL,
        linetype = NULL) +
   theme_minimal(base_size = 14)
@@ -452,6 +488,44 @@ without resorting to ad-hoc tail extrapolation.
 
 ---
 
+## Future direction — why a cure model?
+
+Some indications (oncology, transplant, chronic infection) show a
+**plateau** that no AFT location/dispersion tweak can reach.
+
+The **Poisson mixture cure model** (Rodrigues *et al.* 2009; used in
+[`gsDesign::PoissonMixtureModel`](https://cran.r-project.org/web/packages/gsDesign/vignettes/PoissonMixtureModel.html))
+is a natural next step:
+
+$$
+S(t) \;=\; \exp\!\bigl(-\theta\,(1-\exp(-\lambda t))\bigr),
+\quad \theta = -\log p, \;\; p = \text{cure rate}.
+$$
+
+- Closed under PH on the experimental arm:
+  $S_e(t) = \exp(-\theta\gamma(1-e^{-\lambda t}))$.
+- Two transparent inputs — cure rate $p$ and one survival
+  rate $S(t_1)$ — easy to elicit from clinicians.
+- Same VLDAFT spirit: keep the regression layer simple, let one
+  extra parameter carry the plateau.
+
+---
+
+## Cure model — proposed scaffolding
+
+**Not** part of this PR — would happen on a fresh GitHub issue and a
+`feature/cure-mixture` branch. Likely shape:
+
+- A `cure_weibull` / `cure_exponential` family for `gamlss2` with
+  parameters $(\mu, \sigma, \nu)$, where $\nu = \mathrm{logit}\,p$.
+- A `predict()` `type = "cure"` that returns
+  $\hat p$ alongside survival curves.
+- A vignette comparing VLDAFT vs. cure-mixture on simulated
+  long-tail oncology data.
+- Reuse the existing C ⇄ Rust parity-test scaffolding.
+
+---
+
 ## Summary
 
 - VLDAFT is a **2-line generalisation** of the standard AFT:
@@ -468,7 +542,7 @@ without resorting to ad-hoc tail extrapolation.
 
 ---
 
-## References
+## References {.smaller}
 
 - Anderson, K. M. (1991). A nonproportional hazards Weibull accelerated
   failure time regression model. *Biometrics*, **47**, 281–288.
@@ -479,8 +553,13 @@ without resorting to ad-hoc tail extrapolation.
   *Journal of Statistical Software*, **23**(7).
 - Therneau, T. M. & Grambsch, P. M. (2000). *Modeling Survival Data:
   Extending the Cox Model*. Springer.
-- Package: <https://github.com/keaven/vldaft>
-- Companion data repo (private): <https://github.com/keaven/vldaft.data>
+- Rodrigues, J., Cancho, V. G., de Castro, M. & Louzada-Neto, F.
+  (2009). On the unification of long-term survival models.
+  *Statistics & Probability Letters*, **79**(6), 753–759.
+- [gsDesign vignette: *A cure model calendar-based design*](https://cran.r-project.org/web/packages/gsDesign/vignettes/PoissonMixtureModel.html)
+- Package source: [github.com/keaven/vldaft](https://github.com/keaven/vldaft)
+- Companion data repo (private):
+  [github.com/keaven/vldaft.data](https://github.com/keaven/vldaft.data)
 
 ::: {.notes}
 Render with: `quarto render slides/vldaft-methodology.qmd`
