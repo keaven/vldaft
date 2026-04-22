@@ -44,6 +44,9 @@ articles:
   navbar: ~
   contents:
   - anderson1991
+- title: Reference
+  contents:
+  - survival-explorer
 
 authors:
   Keaven Anderson:
