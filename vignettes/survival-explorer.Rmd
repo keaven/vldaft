@@ -7,11 +7,23 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-```{r, echo = FALSE}
-litedown::vest(
-  css = c("@default", "@tabsets"),
-  js = c("@tabsets", "@npm/chart.js")
-)
+```{r setup, echo = FALSE, results = "asis"}
+## Load chart.js + the litedown tabsets helpers in a way that works
+## under both engines:
+##   - pkgdown / rmarkdown: rendered as raw HTML below.
+##   - litedown::vignette : the vest() call also runs (it is a no-op
+##     under rmarkdown apart from the printed comment we suppress).
+if (requireNamespace("litedown", quietly = TRUE) &&
+    isTRUE(getOption("litedown.knitting"))) {
+  litedown::vest(
+    css = c("@default", "@tabsets"),
+    js  = c("@tabsets", "@npm/chart.js")
+  )
+}
+```
+
+```{=html}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1" defer></script>
 ```
 
 ```{css, echo = FALSE}
