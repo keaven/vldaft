@@ -8,33 +8,61 @@
 \alias{coef.vldaft}
 \alias{vcov.vldaft}
 \alias{logLik.vldaft}
+\alias{predict.vldaft}
 \title{Methods for vldaft Objects}
 \usage{
-\method{print}{vldaft}(x, ...)
+\method{print}{vldaft}(x, digits = max(3L, getOption("digits") - 3L), ...)
 
 \method{summary}{vldaft}(object, ...)
 
-\method{print}{summary.vldaft}(x, ...)
+\method{print}{summary.vldaft}(x, digits = max(3L, getOption("digits") - 3L), ...)
 
 \method{coef}{vldaft}(object, ...)
 
 \method{vcov}{vldaft}(object, ...)
 
-\method{logLik}{vldaft}(object, ...)
+\method{logLik}{vldaft}(object, jacobian = FALSE, ...)
+
+\method{predict}{vldaft}(
+  object,
+  newdata,
+  type = c("lp", "logsigma", "sigma", "median", "survival"),
+  times = NULL,
+  ...
+)
 }
 \arguments{
 \item{x, object}{A \code{vldaft} object.}
 
-\item{...}{Additional arguments (ignored).}
+\item{...}{Additional arguments (mostly ignored; see specific methods).}
+
+\item{jacobian}{Logical (default \code{FALSE}). If \code{TRUE}, add
+\eqn{\sum_i d_i \log(t_i)}{sum(d * log(t))} to the reported log-likelihood
+so that the value matches the time-scale convention used by
+\code{survival::survreg}.}
+
+\item{newdata}{Optional data frame for \code{predict}. If omitted, the
+training data is implied via the stored \code{time}/\code{status};
+supply \code{newdata} to predict on new covariates.}
+
+\item{type}{One of \code{"lp"} (linear predictor for mu, the default),
+\code{"logsigma"}, \code{"sigma"}, \code{"median"} (predicted log-time
+plus \code{sigma * q0.5} where \code{q0.5} is the median of the
+standardized error), or \code{"survival"} (requires \code{times}).}
+
+\item{times}{Numeric vector of times at which to evaluate survival when
+\code{type = "survival"}.}
 }
 \value{
 \code{print} returns \code{x} invisibly.
 \code{summary} returns a \code{summary.vldaft} object.
 \code{coef} returns the coefficient vector.
 \code{vcov} returns the variance-covariance matrix.
-\code{logLik} returns a \code{logLik} object with \code{df} and \code{nobs} attributes.
+\code{logLik} returns a \code{logLik} object with \code{df} and
+\code{nobs} attributes.
+\code{predict} returns a numeric vector (or matrix) on the requested scale.
 }
 \description{
 Print, summary, coefficient extraction, variance-covariance matrix,
-and log-likelihood for \code{vldaft} model fits.
+log-likelihood, and prediction for \code{vldaft} model fits.
 }

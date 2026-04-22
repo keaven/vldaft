@@ -2,20 +2,22 @@
 % Please edit documentation in R/vldaft.R
 \name{parse_vldaft_formula}
 \alias{parse_vldaft_formula}
-\title{Parse vldaft formula}
+\title{Parse a vldaft model formula}
 \usage{
 parse_vldaft_formula(formula, data)
 }
 \arguments{
-\item{formula}{The formula.}
+\item{formula}{The model formula.}
 
-\item{data}{The data frame.}
+\item{data}{The data frame (used only to evaluate the response).}
 }
 \value{
-A list with response, loc_formula, scale_formula.
+A list with elements \code{response}, \code{loc_formula},
+and \code{scale_formula} (possibly \code{NULL}).
 }
 \description{
-Splits a formula like Surv(time, status) ~ x1 + x2 | x3 + x4
-into location and scale parts.
+Splits a formula like \code{Surv(time, status) ~ x1 + x2 | x3 + x4}
+into its location and scale components. Uses a term-based split so it
+is robust to multiline formulas and to expressions on either side.
 }
 \keyword{internal}

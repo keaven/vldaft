@@ -1,7 +1,10 @@
-/* Define compiler, matrix dimensions, machine epsilon */
+/* Matrix algebra for the Newton-Raphson solver.
+   All symmetric matrices are stored packed, lower-triangle by rows. */
+
 #include "rj8def.h"
 
-/* triinv: compute inverse of a triangular matrix */
+
+/* triinv: invert a lower-triangular matrix stored packed. */
 void triinv(double *x, double *y, double *work, int n)
 {
     int i, j, k;
@@ -15,13 +18,13 @@ void triinv(double *x, double *y, double *work, int n)
 }
 
 
-/* trimult: triangular matrix times its transpose */
+/* trimult: multiply packed lower-triangular y by its transpose, result in z. */
 void trimult(double *y, double *z, int n)
 {
     int i, j, k, l, k2, m2;
     for (i = 0; i < n; i++)
     {   for (j = i; j < n; j++)
-        {   k = j * (j + 1) / 2 + i;
+        {   k  = j * (j + 1) / 2 + i;
             m2 = j * (j + 1) / 2 + j;
             z[k] = y[k] * y[m2];
             k2 = k;
@@ -35,7 +38,8 @@ void trimult(double *y, double *z, int n)
 }
 
 
-/* chol: compute cholesky decomposition */
+/* chol: plain Cholesky of packed symmetric s into packed lower-triangular t.
+   Returns 1 if not positive definite. */
 int chol(double *s, double *t, int n)
 {
     double t1, t2;
@@ -46,8 +50,7 @@ int chol(double *s, double *t, int n)
         i0 = ii + 1;
         ii += inc;
         t1 = s[ii];
-        for (ik = i0; ik < ii; ik++)
-            t1 -= t[ik] * t[ik];
+        for (ik = i0; ik < ii; ik++) t1 -= t[ik] * t[ik];
         if (t1 <= 0.) return(1);
         t1 = sqrt(t1);
         t[ii] = t1;
@@ -70,7 +73,8 @@ int chol(double *s, double *t, int n)
 }
 
 
-/* cholmod: modified cholesky decomposition */
+/* cholmod: modified (Gill-Murray-Wright) Cholesky of packed symmetric s.
+   Ensures positive-definiteness by inflating the diagonal when needed. */
 int cholmod(double *s, double *t, double *d, int n)
 {
     double t1, t2, tj, tem, psi, bup;
@@ -106,7 +110,7 @@ int cholmod(double *s, double *t, double *d, int n)
             t2 = s[ji]; for (k = 0; k < i; k++) { t2 -= t[ik] * t[jk] * d[k]; ik++; jk++; }
             t[ji] = t2;
             tem = (t2 > 0. ? t2 : -t2);
-            tj = (tem > tj ? tem : tj);
+            tj  = (tem > tj ? tem : tj);
         }
         tem = tj * tj / bup;
         if (t1 < tem) { t1 = tem; retval = 1; }
@@ -117,7 +121,7 @@ int cholmod(double *s, double *t, double *d, int n)
 }
 
 
-/* ubak: find solution to upper triangular set of equations */
+/* ubak: solve an upper-triangular system (packed storage). */
 int ubak(double *t, double *z, double *y, int m, int n)
 {
     double tem;
@@ -128,12 +132,12 @@ int ubak(double *t, double *z, double *y, int m, int n)
     {   it2 -= 1;
         for (i2 = 0; i2 < m; i2++)
         {   tem = y[iy];
-            it = it2;
-            iz = n * m - 1 - i2;
+            it  = it2;
+            iz  = n * m - 1 - i2;
             for (i3 = 0; i3 < i1; i3++)
             {   tem -= z[iz] * t[it];
-                iz -= m;
-                it -= (n - i3 - 1);
+                iz  -= m;
+                it  -= (n - i3 - 1);
             }
             if (tem != 0 && t[it] == 0) return(1);
             z[iy] = tem / t[it];
@@ -144,7 +148,7 @@ int ubak(double *t, double *z, double *y, int m, int n)
 }
 
 
-/* lbak: find solution to lower triangular set of equations */
+/* lbak: solve a lower-triangular system (packed storage). */
 int lbak(double *t, double *z, double *y, int m, int n)
 {
     double tem;
@@ -153,11 +157,11 @@ int lbak(double *t, double *z, double *y, int m, int n)
     for (i1 = 0; i1 < n; i1++)
     {   for (i2 = 0; i2 < m; i2++)
         {   tem = y[iy];
-            it = (i1 + 1) * i1 / 2;
-            iz = i2;
+            it  = (i1 + 1) * i1 / 2;
+            iz  = i2;
             for (i3 = 0; i3 < i1; i3++)
             {   tem -= z[iz] * t[it];
-                iz += m;
+                iz  += m;
                 it++;
             }
             if (tem != 0 && t[it] == 0) return(1);
@@ -169,19 +173,7 @@ int lbak(double *t, double *z, double *y, int m, int n)
 }
 
 
-/* spdinv: inverse of symmetric, positive definite matrix */
-int spdinv(double *t, double *y, int n)
-{
-    double z1[MAXCOV];
-    if (chol(t, y, n) == 1)
-        return(1);
-    triinv(y, y, z1, n);
-    trimult(y, y, n);
-    return(0);
-}
-
-
-/* symmult: multiplies symmetric matrix times rectangular */
+/* symmult: packed symmetric m x m times rectangular m x n, result m x n. */
 void symmult(double *x, double *y, double *z, int m, int n)
 {
     int i, j, k, l, ij, item, ii2, jj, it;
@@ -191,7 +183,7 @@ void symmult(double *x, double *y, double *z, int m, int n)
         for (j = 0; j < n; j++)
         {   z[l] = 0;
             ii2 = item;
-            jj = j;
+            jj  = j;
             for (k = 0; k < i; k++)
             {   z[l] += x[ii2++] * y[jj];
                 jj += n;
@@ -209,7 +201,7 @@ void symmult(double *x, double *y, double *z, int m, int n)
 }
 
 
-/* mmult1: multiplies two rectangular matrices */
+/* mmult1: general rectangular matrix product, k x m times m x n. */
 void mmult1(double *x, double *y, double *z, int k, int m, int n)
 {
     int kk, mm, nn, i, j2, l;
@@ -217,92 +209,12 @@ void mmult1(double *x, double *y, double *z, int k, int m, int n)
     for (kk = 0; kk < k; kk++)
     {   for (nn = 0; nn < n; nn++)
         {   z[++i] = 0;
-            l = nn;
+            l  = nn;
             j2 = kk * m;
             for (mm = 0; mm < m; mm++)
             {   z[i] += x[j2++] * y[l];
                 l += n;
             }
         }
-    }
-}
-
-
-/* sextract: extracts a portion of a symmetric matrix into a symmetric matrix */
-void sextract(int m, double *symin, int n, double *symout, int *rows)
-{
-    int i, ii, j, j2, j3, k;
-    k = 0;
-    for (i = 0; i < n; i++)
-    {   j = rows[i]; j = j * (j + 1) / 2;
-        j2 = j + rows[i];
-        for (ii = 0; ii < i; ii++)
-        {   if (rows[ii] < rows[i]) symout[k++] = symin[j + rows[ii]];
-            else { j3 = rows[ii]; j3 = j3 * (j3 + 1) / 2; symout[k++] = symin[j3 + rows[i]]; }
-        }
-        symout[k++] = symin[j2];
-    }
-}
-
-
-/* rextract: extracts a portion of a symmetric matrix into a rectangular matrix */
-void rextract(int m, double *symin, int nr, int nc, double *recout, int *rows, int *cols)
-{
-    int i, ii, j, j2, k;
-    k = 0;
-    for (i = 0; i < nr; i++)
-    {   j = rows[i]; j = j * (j + 1) / 2;
-        for (ii = 0; ii < nc; ii++)
-        {   if (cols[ii] <= rows[i]) recout[k++] = symin[j + cols[ii]];
-            else { j2 = cols[ii]; j2 = j2 * (j2 + 1) / 2; recout[k++] = symin[j2 + rows[i]]; }
-        }
-    }
-}
-
-
-/* rectri: takes the lower tri. part of sq. matrix into triangular */
-void rectri(int m, double *rec, double *tri)
-{
-    int i, ii, j, k;
-    k = 0;
-    for (i = 0; i < m; i++)
-    {   j = i * m;
-        for (ii = 0; ii <= i; ii++) tri[k++] = rec[j++];
-    }
-}
-
-
-/* transpose */
-void transpose(double *x, double *y, int m, int n)
-{
-    int i, j, ix, iy;
-    ix = 0;
-    for (i = 0; i < m; i++)
-    {   iy = i;
-        for (j = 0; j < n; j++)
-        {   y[iy] = x[ix++];
-            iy += m;
-        }
-    }
-}
-
-
-/* wald: Wald's hypothesis test */
-double wald(int m, double *ddb, double *cov, int n, int *in, int *out, double *beta)
-{
-    int i;
-    double t1[MAXREC], t2[MAXREC], t3[MAXREC], s1[MAXSS], s2[MAXSS];
-    if (n > 0 && n < m)
-    {   sextract(m, cov, m - n, s1, out);
-        spdinv(s1, s2, m - n);
-        for (i = 0; i < m - n; i++) t1[i] = beta[out[i]];
-        symmult(s2, t1, t2, m - n, 1);
-        mmult1(t1, t2, t3, 1, m - n, 1);
-        return(*t3);
-    }
-    else
-    {   symmult(ddb, beta, t1, m, 1);
-        mmult1(beta, t1, t2, 1, m, 1);
-        return(*t2);
     }
 }

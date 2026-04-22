@@ -3,7 +3,6 @@
 use crate::matrix::{cholmod, chol, triinv, trimult, lbak, ubak, symmult, mmult1};
 
 const MAXCOV: usize = 30;
-const MAXSS: usize = 210;
 
 /// Newton-Raphson optimization with modified Cholesky decomposition.
 ///
@@ -52,8 +51,6 @@ where
         *score = -1.0;
     } else {
         symmult(cov, db, wk, m, 1);
-        mmult1(wk, db, &mut [0.0; 1], 1, m, 1);
-        // Actually we need to write to score
         let mut score_buf = [0.0f64; 1];
         mmult1(wk, db, &mut score_buf, 1, m, 1);
         *score = score_buf[0];

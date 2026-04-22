@@ -18,23 +18,25 @@ vldaft(
 )
 }
 \arguments{
-\item{formula}{A formula of the form \code{Surv(time, status) ~ loc_vars | scale_vars}.
+\item{formula}{A formula of the form
+\code{Surv(time, status) ~ loc_vars | scale_vars}.
 Left of \code{|} specifies location (mu) covariates, right specifies
-scale (gamma) covariates. If no \code{|} is present, all covariates enter
-the location model and scale has intercept only.}
+scale (gamma) covariates. If no \code{|} is present, all covariates
+enter the location model and the scale has an intercept only.}
 
 \item{data}{A data frame.}
 
-\item{dist}{Character string specifying the error distribution:
-\code{"weibull"} (default), \code{"logistic"}, \code{"normal"},
-\code{"cauchy"}, or \code{"gamma"}.}
+\item{dist}{Character: error distribution. One of \code{"weibull"}
+(default), \code{"logistic"}, \code{"normal"}, \code{"cauchy"},
+\code{"gamma"}.}
 
-\item{theta}{Integer, order of the theta polynomial linking log(sigma) to mu.
-0 = no coupling (default), 1 = linear in mu, 2 = quadratic, etc.}
+\item{theta}{Integer, order of the theta polynomial linking
+\eqn{\log(\sigma)} to \eqn{\mu}. \code{0} = no coupling (default),
+\code{1} = linear, \code{2} = quadratic, etc.}
 
-\item{theta_vars}{A one-sided formula specifying which location covariates
-form mu* (the mu that feeds into the theta polynomial for sigma).
-Default \code{NULL} means all location covariates.}
+\item{theta_vars}{A one-sided formula naming the location covariates that
+form \eqn{\mu^*} (the \eqn{\mu} that feeds into the theta polynomial
+for \eqn{\sigma}). Default \code{NULL} means all location covariates.}
 
 \item{nu}{Numeric, shape parameter for the gamma distribution (only used
 when \code{dist = "gamma"}).}
@@ -42,12 +44,15 @@ when \code{dist = "gamma"}).}
 \item{init}{Numeric vector of initial parameter values, or \code{NULL}
 for zeros.}
 
-\item{control}{A list of control parameters. See Details.}
+\item{control}{A list of control parameters: \code{acc} (convergence
+tolerance, default \code{1e-4}), \code{maxiter} (max Newton-Raphson
+iterations, default 50), \code{maxhalv} (max step halvings, default 20).}
 
-\item{adjust}{Logical, whether to center covariates (default \code{TRUE}).}
+\item{adjust}{Logical; center covariates (default \code{TRUE}). Centering
+does not change location coefficients but does shift the interpretation
+of \eqn{\mu^*} used by the theta polynomial.}
 
-\item{backend}{Character, which computation backend to use:
-\code{"c"} (default) or \code{"rust"}.}
+\item{backend}{Character, \code{"c"} (default) or \code{"rust"}.}
 }
 \value{
 An object of class \code{"vldaft"}.
@@ -59,23 +64,30 @@ through a theta polynomial.
 }
 \details{
 The model assumes
-\deqn{\log(T) = \mu + \sigma \cdot \varepsilon}{log(T) = mu + sigma * epsilon}
-where the location is a linear function of covariates,
-\deqn{\mu = \beta_0 + \beta_1 x_1 + \cdots + \beta_p x_p}{mu = b0 + b1*x1 + ... + bp*xp}
-and the log-dispersion can depend on covariates and on the location:
-\deqn{\log(\sigma) = \gamma_0 + \gamma_1 z_1 + \cdots + \gamma_q z_q + \theta_1 \mu^{*} + \theta_2 \mu^{*2} + \cdots}{log(sigma) = g0 + g1*z1 + ... + gq*zq + theta1*mu* + theta2*mu*^2 + ...}
-Here \eqn{\mu^{*} = \mu - \bar{\mu}}{mu* = mu - mean(mu)} is the centered location.
-When \eqn{\theta_1 = 0}{theta1 = 0}, this reduces to the standard linear location AFT
-model with proportional hazards under a Weibull distribution.
-The error distribution \eqn{F} can be Weibull (extreme value), logistic,
-normal, Cauchy, or gamma.
+\deqn{\log(T) = \mu + \sigma \cdot \varepsilon,}{log(T) = mu + sigma * epsilon,}
+with
+\deqn{\mu = \beta_0 + \beta_1 x_1 + \cdots + \beta_p x_p,}{mu = b0 + b1 x1 + ... + bp xp,}
+\deqn{\log(\sigma) = \gamma_0 + \gamma_1 z_1 + \cdots + \gamma_q z_q + \theta_1 \mu^{*} + \theta_2 \mu^{*2} + \cdots,}{log(sigma) = g0 + g1 z1 + ... + gq zq + theta1 mustar + theta2 mustar^2 + ...,}
+where \eqn{\mu^{*} = \mu - \bar{\mu}}{mu* = mu - mean(mu)} is the centered
+location. Setting \eqn{\theta = 0}{theta = 0} recovers the standard linear
+location AFT model (proportional hazards under the Weibull error). The
+estimator is Newton-Raphson with modified Cholesky safeguards.
 
-Control parameters:
-\describe{
-\item{acc}{Convergence accuracy (default 0.0001)}
-\item{maxiter}{Maximum Newton-Raphson iterations (default 50)}
-\item{maxhalv}{Maximum step halvings (default 20)}
+Coefficient names are prefixed to mark their role:
+\itemize{
+\item \code{gamma:} -- scale (dispersion) regression coefficients
+\item \code{eta:} -- location regression coefficients
+\item \code{theta1}, \code{theta2}, ... -- polynomial coupling terms
 }
+
+The returned log-likelihood is on the log-time scale (no Jacobian). To
+compare with \code{survival::survreg}, add
+\eqn{\sum_i d_i \log(t_i)}{sum_i d_i log(t_i)}; \code{logLik()} exposes this
+via its \code{jacobian} argument.
+
+The compiled back end has a compile-time cap of \code{MAXCOV = 30}
+parameters (scale + location + theta). The R wrapper checks this before
+dispatching.
 }
 \references{
 Anderson, K.M. (1991). A nonproportional hazards Weibull accelerated failure

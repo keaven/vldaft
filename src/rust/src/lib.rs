@@ -1,4 +1,4 @@
-// lib.rs — extendr entry point for vldaft Rust backend
+//! extendr entry point for the vldaft Rust backend.
 
 use extendr_api::prelude::*;
 
@@ -9,11 +9,8 @@ mod newton_raphson;
 
 use model::{Distribution, ModelState};
 
-const MAXCOV: usize = 30;
-const MAXSS: usize = 210;
-
-/// Fit AFT regression model (Rust backend)
-/// Same interface as C vldaft_fit
+/// Fit the AFT regression model (Rust backend).
+/// The interface mirrors the C `vldaft_fit` entry point one-for-one.
 #[extendr]
 fn vldaft_fit_rust(
     data: RMatrix<f64>,
@@ -39,7 +36,6 @@ fn vldaft_fit_rust(
     let ncol = data.ncols();
     let rdata = data.as_real_slice().unwrap();
 
-    // Set up distribution
     let distribution = match dist {
         1 => Distribution::Weibull,
         2 => Distribution::Logistic,
@@ -49,12 +45,10 @@ fn vldaft_fit_rust(
         _ => panic!("Unknown distribution: {}", dist),
     };
 
-    // Convert integer vectors
     let ev_vals: Vec<i32> = event_vals.iter().map(|v| v.inner()).collect();
-    let loc_c: Vec<i32> = loc_cols.iter().map(|v| v.inner()).collect();
+    let loc_c:   Vec<i32> = loc_cols.iter().map(|v| v.inner()).collect();
     let scale_c: Vec<i32> = scale_cols.iter().map(|v| v.inner()).collect();
 
-    // Create model state
     let mut state = ModelState::from_r_data(
         rdata, nobs, ncol,
         &loc_c, &scale_c,
@@ -67,31 +61,41 @@ fn vldaft_fit_rust(
     );
 
     let npar = state.npar;
-
-    // Initialize beta
-    let mut beta = vec![0.0f64; MAXCOV];
-    if let NotNull(init_vals) = init {
-        let ninit = init_vals.len().min(npar);
-        for i in 0..ninit {
-            beta[i] = init_vals[i].inner();
-        }
+    if npar > 30 {
+        panic!(
+            "vldaft (rust backend): too many parameters ({} > 30). \
+             Reduce the model or rebuild with a larger compile-time cap.",
+            npar
+        );
     }
 
-    let mut cov = vec![0.0f64; MAXSS];
-    let mut wk = vec![0.0f64; MAXCOV];
-    let mut delb = vec![0.0f64; MAXCOV];
-    let mut db = vec![0.0f64; MAXCOV];
-    let mut ddb = vec![0.0f64; MAXSS];
+    // MAXCOV = 30 matches the C backend; keep the two in sync.
+    let maxcov = 30usize;
+    let maxss  = maxcov * (maxcov + 1) / 2;
+
+    let mut beta = vec![0.0f64; maxcov];
+    if let NotNull(init_vals) = init {
+        let ninit = init_vals.len().min(npar);
+        for i in 0..ninit { beta[i] = init_vals[i].inner(); }
+    }
+
+    let mut cov  = vec![0.0f64; maxss];
+    let mut wk   = vec![0.0f64; maxcov];
+    let mut delb = vec![0.0f64; maxcov];
+    let mut db   = vec![0.0f64; maxcov];
+    let mut ddb  = vec![0.0f64; maxss];
     let mut finit = 0.0f64;
-    let mut fmax = 0.0f64;
+    let mut fmax  = 0.0f64;
     let mut score_stat = 0.0f64;
 
-    // Create partials closure
     let iter = {
-        let mut par = |m: usize, beta_in: &[f64], db_out: &mut [f64], ddb_out: &mut [f64], ll: &mut f64| -> i32 {
+        let mut par = |m: usize,
+                       beta_in: &[f64],
+                       db_out: &mut [f64],
+                       ddb_out: &mut [f64],
+                       ll: &mut f64| -> i32 {
             state.ac_tpar8(m, beta_in, db_out, ddb_out, ll)
         };
-
         newton_raphson::nrsolmod(
             &mut par,
             npar,
@@ -110,32 +114,28 @@ fn vldaft_fit_rust(
         )
     };
 
-    // Build result list
+    // Expand packed lower-triangular cov into a symmetric dense matrix.
     let beta_r: Vec<f64> = beta[..npar].to_vec();
-
-    // Convert packed symmetric cov to full matrix
     let mut cov_full = vec![0.0f64; npar * npar];
     let mut k = 0usize;
     for i in 0..npar {
-        for j2 in 0..=i {
-            cov_full[i + j2 * npar] = cov[k];
-            cov_full[j2 + i * npar] = cov[k];
+        for j in 0..=i {
+            cov_full[i + j * npar] = cov[k];
+            cov_full[j + i * npar] = cov[k];
             k += 1;
         }
     }
-
-    // Create R matrix from cov_full
     let cov_matrix = RMatrix::new_matrix(npar, npar, |r, c| cov_full[r + c * npar]);
 
     list!(
         coefficients = beta_r,
-        vcov = cov_matrix,
-        loglik = fmax,
-        loglik_init = finit,
-        score = score_stat,
-        iter = iter,
-        npar = npar as i32,
-        nobs = nobs as i32
+        vcov         = cov_matrix,
+        loglik       = fmax,
+        loglik_init  = finit,
+        score        = score_stat,
+        iter         = iter,
+        npar         = npar as i32,
+        nobs         = nobs as i32
     )
 }
 

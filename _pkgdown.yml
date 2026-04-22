@@ -2,3 +2,49 @@ url: https://keaven.github.io/vldaft/
 
 template:
   bootstrap: 5
+  bslib:
+    primary: "#2b6cb0"
+
+home:
+  title: vldaft
+  description: >
+    Varying Location and Dispersion Accelerated Failure Time regression
+    in R, with C and Rust back ends.
+  links:
+  - text: Methodology paper (Anderson 1991)
+    href: https://doi.org/10.2307/2532512
+
+navbar:
+  structure:
+    left:  [intro, reference, articles, news]
+    right: [github]
+
+reference:
+- title: Model fitting
+  desc: Fit the VLDAFT model to survival data.
+  contents:
+  - vldaft
+- title: Methods
+  desc: Inspect a fitted model.
+  contents:
+  - has_concept("vldaft-methods")
+  - print.vldaft
+  - summary.vldaft
+  - coef.vldaft
+  - vcov.vldaft
+  - logLik.vldaft
+  - predict.vldaft
+- title: gamlss2 families
+  desc: Family constructors for use inside the gamlss2 framework.
+  contents:
+  - starts_with("AFT_")
+
+articles:
+- title: Methodology
+  navbar: ~
+  contents:
+  - anderson1991
+
+authors:
+  Keaven Anderson:
+    href: https://github.com/keaven

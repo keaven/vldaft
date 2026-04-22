@@ -1,0 +1,22 @@
+citHeader("To cite vldaft in publications, please cite both the package and the original methodology paper.")
+
+bibentry(
+  bibtype = "Manual",
+  title   = "vldaft: Non-Proportional Hazards Accelerated Failure Time Regression",
+  author  = person("Keaven", "Anderson"),
+  year    = format(Sys.Date(), "%Y"),
+  note    = sprintf("R package version %s", meta$Version),
+  url     = "https://keaven.github.io/vldaft/"
+)
+
+bibentry(
+  bibtype = "Article",
+  title   = "A nonproportional hazards {Weibull} accelerated failure time regression model",
+  author  = person("Keaven M.", "Anderson"),
+  journal = "Biometrics",
+  year    = "1991",
+  volume  = "47",
+  number  = "1",
+  pages   = "281--288",
+  doi     = "10.2307/2532512"
+)
