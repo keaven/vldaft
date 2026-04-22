@@ -11,3 +11,6 @@
 ^docs$
 ^CLAUDE\.md$
 ^README\.md$
+^LICENSE\.md$
+^NEWS\.md$
+^slides$

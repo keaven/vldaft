@@ -1,0 +1,487 @@
+---
+title: "Varying-Dispersion AFT Models for Survival Prediction"
+subtitle: "A simple, flexible regression model for risk and health-economic comparisons"
+author: "Keaven Anderson"
+date: today
+format:
+  revealjs:
+    theme: simple
+    slide-number: true
+    chalkboard: false
+    incremental: false
+    fig-width: 8
+    fig-height: 4.5
+    fig-align: center
+    code-line-numbers: false
+    css: |
+      .small-table table { font-size: 0.7em; }
+      .reveal section pre code { max-height: 480px; }
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## What this talk is about
+
+- A simple, flexible parametric **regression** model for survival data,
+  in the spirit of `survreg()` / `gamlss2`, but with one extra twist.
+- The twist: let the **dispersion** depend on the **location** through
+  a low-order polynomial — Anderson (1991)'s VLDAFT model.
+- Why we care: a single fitted model gives you
+    * per-subject **risk predictions** at any horizon,
+    * smooth **survival curves** for sub-populations,
+    * scalar summaries (median, RMST, expected QALYs) for
+      **health-economic comparisons**,
+  and it gracefully accommodates **non-proportional hazards**.
+- Today: methodology, the legacy C → modern R+Rust port, the
+  `gamlss2` extension, and a small live demo.
+
+::: {.notes}
+The selling point of this model is that it is *small*: typically 2 (location)
++ 1 (intercept of dispersion) + 1 (theta) parameters more than a Cox model.
+That makes it well-suited for prediction in moderately sized cohorts.
+:::
+
+---
+
+## Why parametric AFT, not Cox?
+
+| Need                                | Cox PH                                        | AFT regression                |
+|-------------------------------------|-----------------------------------------------|-------------------------------|
+| Hazard ratios                       | Yes (constant)                                | Yes, possibly time-varying    |
+| Survival curve at *any* horizon     | Awkward (relies on baseline hazard estimate)  | Closed form                   |
+| Extrapolation past follow-up        | Heroic                                        | Natural (parametric)          |
+| RMST / expected QALYs               | Numerical integration of $\hat{S}(t)$         | Direct from fitted parametric |
+| Non-proportional hazards            | Stratify or interact with $\log t$            | **Just let $\sigma$ depend on $\mu$** |
+
+For risk prediction and health-economic modelling, the AFT
+**regression** view is almost always more convenient.
+
+---
+
+## The classical AFT model
+
+For a positive event time $T_i$ and covariates $\mathbf{x}_i$:
+
+$$
+\log T_i \;=\; \mu_i \;+\; \sigma\,\varepsilon_i,
+\qquad
+\mu_i \;=\; \beta_0 + \boldsymbol\beta^\top \mathbf{x}_i,
+$$
+
+with $\varepsilon_i \sim F_0$ from a known distribution (extreme value,
+logistic, normal, Cauchy, gamma).
+
+- **Constant dispersion** $\sigma$ across subjects.
+- Under the extreme-value error this gives the **Weibull AFT**, which is
+  also Cox PH — *with the same hazard ratio over all time*.
+
+::: {.callout-note}
+This constant-$\sigma$ assumption is the single biggest reason people
+reach for time-varying coefficient models, fractional polynomials, or
+splines on the log-hazard. Anderson (1991) takes a different route.
+:::
+
+---
+
+## The VLDAFT extension
+
+Let *both* location and dispersion depend on covariates,
+**and** let dispersion depend on the fitted location:
+
+$$
+\log T_i = \mu_i + \sigma_i \,\varepsilon_i
+$$
+
+$$
+\mu_i = \boldsymbol\eta^\top \mathbf{x}_i,
+\qquad
+\log \sigma_i = \boldsymbol\gamma^\top \mathbf{z}_i
+              \;+\; \sum_{k=1}^{K} \theta_k\,(\mu_i - \bar{\mu})^k.
+$$
+
+- $\boldsymbol\eta$: location coefficients (mean log time).
+- $\boldsymbol\gamma$: scale (dispersion) coefficients on possibly
+  separate covariates $\mathbf{z}_i$.
+- $\theta_1, \ldots, \theta_K$: **the coupling parameters** — the
+  whole point of the model.
+- $K = 0$ recovers the classical AFT.
+
+---
+
+## What does $\theta_1$ buy you?
+
+Pick $K = 1$:
+
+$$
+\log \sigma_i \;=\; \gamma_0 \;+\; \theta_1\,(\mu_i - \bar\mu).
+$$
+
+- $\theta_1 = 0$: classical AFT — under Weibull errors, **proportional hazards**.
+- $\theta_1 < 0$: subjects with a longer expected time (large $\mu_i$)
+  have **smaller** dispersion → their hazard rises later but
+  **catches up** with high-risk subjects → **converging hazards**.
+- $\theta_1 > 0$: hazards diverge over time.
+
+A *single scalar* lets the hazard ratio between any two subjects
+**change over time**, smoothly and parametrically.
+
+---
+
+## Visualising converging hazards
+
+```{r theta-illustration}
+#| label: fig-theta
+#| fig-cap: "Hazard ratio (high vs low risk) over time, Weibull errors. With θ₁ = 0 the ratio is constant; with θ₁ < 0 the hazards converge."
+#| code-fold: true
+library(ggplot2)
+weibull_hazard <- function(t, mu, sigma) {
+  alpha <- 1 / sigma
+  lambda <- exp(-mu / sigma)
+  alpha * lambda * t^(alpha - 1)
+}
+mu_high <- 4.0   # longer expected log-time
+mu_low  <- 3.0   # shorter expected log-time
+gamma0  <- log(0.6)
+t_grid  <- seq(0.1, 50, length.out = 400)
+make_curve <- function(theta1) {
+  sigma_high <- exp(gamma0 + theta1 * (mu_high - 3.5))
+  sigma_low  <- exp(gamma0 + theta1 * (mu_low  - 3.5))
+  hr <- weibull_hazard(t_grid, mu_low,  sigma_low) /
+        weibull_hazard(t_grid, mu_high, sigma_high)
+  data.frame(t = t_grid, hr = hr,
+             theta1 = sprintf("theta1 = %+0.2f", theta1))
+}
+df <- do.call(rbind, lapply(c(0, -0.20, -0.40, 0.20), make_curve))
+ggplot(df, aes(t, hr, colour = theta1)) +
+  geom_line(linewidth = 1) +
+  scale_y_log10() +
+  labs(x = "Time", y = "Hazard ratio (low-mu vs high-mu)",
+       colour = NULL) +
+  theme_minimal(base_size = 14)
+```
+
+---
+
+## Estimation in one slide
+
+Maximize the (log-)likelihood
+$$
+\ell(\boldsymbol\eta, \boldsymbol\gamma, \boldsymbol\theta)
+= \sum_i \Bigl[d_i \log f_0(\varepsilon_i) - d_i \log \sigma_i
+              + (1-d_i)\log S_0(\varepsilon_i)\Bigr]
+$$
+with $\varepsilon_i = (\log t_i - \mu_i)/\sigma_i$, plus left-truncation
+adjustments when needed.
+
+- **Newton–Raphson** with analytic gradient and Hessian.
+- **Modified Cholesky** (Gill–Murray–Wright) keeps the step descent
+  even when the Hessian is indefinite far from the optimum.
+- **Step halving** + steepest-ascent fallback recover from bad steps.
+- Output: $\hat{\boldsymbol\beta}$, observed information matrix, score
+  statistic, log-likelihood at convergence.
+
+---
+
+## The legacy C codebase: where we started
+
+The original analyses for Anderson (1991) shipped as a small set of
+hand-rolled C programs:
+
+- `bw.c` — backward-elimination driver, wrote influence functions to
+  files via `fopen`/`fprintf`.
+- `apolyth.c`, `loscpar.c` — alternative partials engines (the
+  "$a(\cdot)$" formulation).
+- `dataio8.c`, `loscreg8.c`, `nrmod.c`, `matrix.c` — the parts that
+  actually compute the likelihood, gradient, Hessian, and run
+  Newton–Raphson.
+- Stored the design matrix in **`float`** to save memory on 1990
+  workstations.
+- Communicated through **C globals** plus a hidden `priter` debug flag.
+
+What we kept, what we cut, and what we fixed on the next slide.
+
+---
+
+## What we changed (C side)
+
+| Change                                                 | Why                                            |
+|--------------------------------------------------------|------------------------------------------------|
+| Removed `bw.c`, `apolyth.c`, `loscpar.c`, `entrypoint.c` | Not exposed to R; deleting them halved the C surface area. |
+| Removed `fopen`/`fprintf`/influence-file I/O           | CRAN policy, also unused.                      |
+| `float *x` → `double *x` everywhere                     | Removed a ~1e-7 floor on parameter accuracy.   |
+| `MACHEPS = 3e-39` → `DBL_EPSILON`                      | The old constant could underflow `cholmod`.    |
+| `R_alloc` for the design matrix                        | No more `malloc`/`free`, no leak risk.         |
+| `MAXCOV = 30` cap enforced at the R boundary           | No more silent stack-buffer overflow.          |
+| Single `vldaft_fit` SEXP entry registered in `init.c`  | Standard R native-routines registration.       |
+| Added `Makevars.win` and an R-CMD-check workflow       | Builds + checks on Linux, macOS, Windows.      |
+
+Net effect: **same algorithm**, ~1700 fewer lines of C, and double-precision
+end-to-end.
+
+---
+
+## Translation to Rust — for experimentation
+
+Why mirror the engine in Rust at all?
+
+1. **Refactoring safety.** Rust's borrow checker turned the C globals
+   into a single `ModelState` struct; we now know what `ac_tpar8`
+   touches.
+2. **Reference implementation.** Two independent ports running on the
+   same data is a free regression test (see
+   `tests/testthat/test-backend-parity.R`).
+3. **Easy to fork-and-experiment.** Adding a new error distribution or
+   a different coupling term is a 30-line patch in
+   `src/rust/src/distributions.rs` or `src/rust/src/model.rs`,
+   without recompiling the rest of R.
+
+```r
+fit_c <- vldaft(Surv(time, status) ~ x1 + x2, data = d, backend = "c")
+fit_r <- vldaft(Surv(time, status) ~ x1 + x2, data = d, backend = "rust")
+all.equal(coef(fit_c), coef(fit_r))   # TRUE to ~1e-8
+```
+
+::: {.notes}
+Because both the C and Rust engines now use f64 throughout, the parity
+test passes to the last few bits.  Before the float→double cleanup the
+two backends differed by ~1e-7 on the Framingham data.
+:::
+
+---
+
+## How the Rust backend is wired
+
+- **`extendr-api`** generates `wrap__vldaft_fit_rust` as a regular
+  R native routine; same `.Call()` story as the C entry point.
+- `cargo build --lib --release` produces `libvldaft.a`, which
+  `src/Makevars` links into the package shared object.
+- `ModelState` owns: the row-major data matrix, column means, parameter
+  configuration (scale/loc/theta column indices), distribution choice,
+  and a reusable per-row scratch buffer.
+- `Distribution` is an `enum` — adding `LogLogistic`, `Generalized
+  Gamma`, etc. is mechanical.
+
+```rust
+match self {
+    Distribution::Weibull        => weibull(event, x, f),
+    Distribution::Logistic       => logistic(event, x, f),
+    Distribution::Normal         => normal_dist(event, x, f),
+    Distribution::Cauchy         => cauchy_dist(event, x, f),
+    Distribution::Gamma { nu, enu } => gamma_dist(event, x, f, *nu, *enu),
+}
+```
+
+---
+
+## Plugging into `gamlss2` for extra flexibility
+
+The `vldaft` model is an exponential-family-with-extras object, which
+makes it a natural fit for the `gamlss2` framework:
+
+- Each parameter (`mu`, `sigma`, `theta1`, `theta2`, ...) gets its
+  **own regression formula**, with smooth terms, splines, random
+  effects, etc.
+- We ship `AFT_Weibull()`, `AFT_Logistic()`, `AFT_Normal()`,
+  `AFT_Cauchy()`, `AFT_Gamma()` as `gamlss2.family` objects.
+
+```r
+library(gamlss2)
+fit <- gamlss2(Surv(time, status) ~ s(age) + sex,        # mu
+                                ~ s(age),                 # sigma
+                                ~ 1,                      # theta1
+               family = AFT_Weibull(theta = 1),
+               data   = my_cohort)
+```
+
+Result: smooth, monotone risk predictions; you can keep the model
+**simple where it can be**, and only spend complexity where the data
+demand it.
+
+---
+
+## Demo — simulated data
+
+```{r sim-data}
+set.seed(20240421)
+sim_aft_data <- function(n = 600, theta1 = -0.30) {
+  x1 <- rnorm(n)
+  x2 <- rbinom(n, 1, 0.4)
+  mu <- 2.0 + 0.6 * x1 - 0.4 * x2
+  log_sigma <- -0.30 + theta1 * (mu - mean(mu))
+  sigma <- exp(log_sigma)
+  eps <- log(-log(runif(n)))    # standard Gumbel
+  t_event <- exp(mu + sigma * eps)
+  c_time  <- rexp(n, rate = 0.03)
+  data.frame(time   = pmin(t_event, c_time),
+             status = as.integer(t_event <= c_time),
+             x1     = x1,
+             x2     = x2)
+}
+d <- sim_aft_data()
+table(d$status)
+```
+
+True data-generating mechanism: **dispersion shrinks with location**
+($\theta_1 = -0.3$).  A constant-$\sigma$ AFT is mis-specified.
+
+---
+
+## Demo — fit and likelihood-ratio test
+
+```{r sim-fit}
+#| eval: false
+library(vldaft)
+library(survival)
+
+f0 <- vldaft(Surv(time, status) ~ x1 + x2, data = d,
+             dist = "weibull", theta = 0)
+f1 <- vldaft(Surv(time, status) ~ x1 + x2, data = d,
+             dist = "weibull", theta = 1)
+
+LR <- 2 * (f1$loglik - f0$loglik)
+p  <- pchisq(LR, df = 1, lower.tail = FALSE)
+data.frame(loglik_theta0 = f0$loglik,
+           loglik_theta1 = f1$loglik,
+           LR = LR, df = 1, p_value = p)
+coef(f1)["theta1"]
+```
+
+Typical output on this simulation:
+
+```
+loglik_theta0 = -1224.1   loglik_theta1 = -1218.9
+LR = 10.4   df = 1   p = 0.0013
+theta1 = -0.27   (true -0.30)
+```
+
+---
+
+## Demo — predicted survival, two profiles
+
+```{r sim-survival}
+#| label: fig-survival
+#| fig-cap: "Predicted survival under θ₁ = 0 (dashed) vs θ₁ = -0.3 (solid). The mis-specified constant-σ model under-predicts long-term survival in the low-risk group."
+#| code-fold: true
+library(ggplot2)
+weibull_S <- function(t, mu, sigma) {
+  exp(-exp((log(t) - mu) / sigma))
+}
+t_grid <- seq(1, 200, length.out = 300)
+mu_low  <- 2.0 + 0.6 * 1.0 - 0.4 * 0
+mu_high <- 2.0 + 0.6 * (-1.0) - 0.4 * 1
+mubar   <- 2.0
+make_panel <- function(theta1) {
+  s_low_low  <- weibull_S(t_grid, mu_low,  exp(-0.30 + theta1 * (mu_low  - mubar)))
+  s_high     <- weibull_S(t_grid, mu_high, exp(-0.30 + theta1 * (mu_high - mubar)))
+  rbind(
+    data.frame(t = t_grid, S = s_low_low,  group = "low risk",  theta1 = theta1),
+    data.frame(t = t_grid, S = s_high,     group = "high risk", theta1 = theta1)
+  )
+}
+df <- rbind(make_panel(0.0), make_panel(-0.30))
+df$linetype <- ifelse(df$theta1 == 0, "constant sigma (theta1 = 0)",
+                                       "VLDAFT (theta1 = -0.30)")
+ggplot(df, aes(t, S, colour = group, linetype = linetype)) +
+  geom_line(linewidth = 1) +
+  labs(x = "Time", y = "Predicted survival", colour = NULL,
+       linetype = NULL) +
+  theme_minimal(base_size = 14)
+```
+
+---
+
+## Demo — risk prediction at a fixed horizon
+
+```{r sim-risk}
+#| eval: false
+new_subj <- data.frame(x1 = c(-1, 0, 1), x2 = c(0, 0, 1))
+S_5y  <- predict(f1, newdata = new_subj, type = "survival",
+                 times = 5 * 365.25)
+S_10y <- predict(f1, newdata = new_subj, type = "survival",
+                 times = 10 * 365.25)
+
+cbind(new_subj,
+      risk_5y  = 1 - S_5y,
+      risk_10y = 1 - S_10y)
+```
+
+For risk-stratification work, **one fitted model** delivers calibrated
+absolute risks at *any* horizon, including ones beyond the
+follow-up tail — a major practical advantage over Cox + breslow.
+
+---
+
+## Demo — health-economic comparisons (RMST)
+
+```{r sim-rmst}
+#| eval: false
+rmst <- function(fit, newdata, horizon, n_grid = 400) {
+  t_grid <- seq(1, horizon, length.out = n_grid)
+  S <- predict(fit, newdata = newdata, type = "survival",
+               times = t_grid)
+  if (is.matrix(S)) apply(S, 1, function(s) {
+    sum(0.5 * (head(s, -1) + tail(s, -1)) * diff(t_grid))
+  }) else sum(0.5 * (head(S, -1) + tail(S, -1)) * diff(t_grid))
+}
+arm <- expand.grid(x1 = c(-1, 1), x2 = c(0, 1))
+arm$rmst_10y <- rmst(f1, arm, horizon = 10 * 365.25)
+arm$rmst_20y <- rmst(f1, arm, horizon = 20 * 365.25)
+arm
+```
+
+RMST differences feed straight into incremental cost-effectiveness
+ratios (ICERs) and quality-adjusted life-year (QALY) accumulation,
+without resorting to ad-hoc tail extrapolation.
+
+---
+
+## Where this stops working
+
+- The location-driven coupling assumes the **same shape** of dispersion
+  variation across all covariate combinations. If two covariates
+  drive dispersion in *different* directions, you may need separate
+  scale covariates (`Surv(...) ~ loc | scale`) or move to `gamlss2`.
+- $K > 2$ rarely earns its degrees of freedom on real datasets.
+- Like every parametric model, mis-specification of the error
+  distribution can bite — check residuals and try several distributions
+  before committing.
+- Identifiability gets shaky when $\boldsymbol\eta$ has very little
+  signal (since $\theta_k$ acts on $\mu - \bar\mu$).
+
+---
+
+## Summary
+
+- VLDAFT is a **2-line generalisation** of the standard AFT:
+  $\log\sigma$ varies with $\mu$ via a polynomial.
+- One model, one set of coefficients, gives **risk predictions**,
+  **survival curves**, **RMST**, and **non-proportional hazards** for
+  free.
+- The 1991 Fortran-style C engine has been **modernised** (double
+  precision, no globals, MAXCOV-safe, CRAN-clean) and **mirrored in Rust**
+  for safe experimentation.
+- `gamlss2` integration adds **smooth-term regression** on top.
+- Designed to be **easy to fit, easy to explain, easy to extend** —
+  exactly what a forecasting / health-economic workflow wants.
+
+---
+
+## References
+
+- Anderson, K. M. (1991). A nonproportional hazards Weibull accelerated
+  failure time regression model. *Biometrics*, **47**, 281–288.
+- Gill, P. E., Murray, W., & Wright, M. H. (1981). *Practical
+  Optimization*. Academic Press. (Modified Cholesky.)
+- Stasinopoulos, M. D. & Rigby, R. A. (2007). Generalized additive
+  models for location, scale and shape (GAMLSS) in R.
+  *Journal of Statistical Software*, **23**(7).
+- Therneau, T. M. & Grambsch, P. M. (2000). *Modeling Survival Data:
+  Extending the Cox Model*. Springer.
+- Package: <https://github.com/keaven/vldaft>
+- Companion data repo (private): <https://github.com/keaven/vldaft.data>
+
+::: {.notes}
+Render with: `quarto render slides/vldaft-methodology.qmd`
+:::
