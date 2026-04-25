@@ -49,6 +49,9 @@ articles:
 - title: Reference
   contents:
   - survival-explorer
+- title: Development
+  contents:
+  - agent-skills
 
 authors:
   Keaven Anderson:
