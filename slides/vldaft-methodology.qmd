@@ -558,8 +558,6 @@ $$
   *Statistics & Probability Letters*, **79**(6), 753–759.
 - [gsDesign vignette: *A cure model calendar-based design*](https://cran.r-project.org/web/packages/gsDesign/vignettes/PoissonMixtureModel.html)
 - Package source: [github.com/keaven/vldaft](https://github.com/keaven/vldaft)
-- Companion data repo (private):
-  [github.com/keaven/vldaft.data](https://github.com/keaven/vldaft.data)
 
 ::: {.notes}
 Render with: `quarto render slides/vldaft-methodology.qmd`

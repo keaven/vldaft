@@ -2,6 +2,7 @@ url: https://keaven.github.io/vldaft/
 
 template:
   bootstrap: 5
+  math-rendering: katex
   bslib:
     primary: "#2b6cb0"
 

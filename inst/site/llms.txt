@@ -20,10 +20,8 @@ pak::pak("keaven/vldaft")
 Requires R >= 3.5 and a Rust toolchain (rustc + cargo); install from
 <https://rustup.rs>.
 
-Confidential example data are NOT shipped with this package. They live in
-a separate private repository (`vldaft.data`). All reproducible results
-and regression tests that need the Framingham data are kept there; this
-repository provides the estimator and its documentation only.
+Confidential example data are NOT shipped with this package; this
+repository provides the estimator, self-contained tests, and documentation.
 
 ## Project layout
 
@@ -44,7 +42,7 @@ repository provides the estimator and its documentation only.
   ... for the polynomial coupling terms.
 - The `backend` argument picks `"c"` or `"rust"` via `.Call()`.
 - Log-likelihood is returned on the log-time scale (no Jacobian). To
-  match `survival::survreg`, add `sum(d * log(t))` or call
+  match `survival::survreg`, subtract `sum(d * log(t))` or call
   `logLik(fit, jacobian = TRUE)`.
 - The packed symmetric storage for the Hessian is lower-triangle-by-rows.
 - Both backends cap parameters at `MAXCOV = 30` (enforced at the R
@@ -57,7 +55,8 @@ Weibull, logistic, normal, Cauchy, gamma.
 
 ## Supported censoring
 
-Right censoring, left censoring, and left truncation (delayed entry).
+Right censoring, left censoring, interval censoring, and left truncation
+(delayed entry).
 
 ## Build system
 
@@ -73,8 +72,7 @@ Right censoring, left censoring, and left truncation (delayed entry).
 ## Testing
 
 - Run tests: `devtools::test()` or `testthat::test_local()`.
-- Tests here are self-contained (simulated data); data-driven regression
-  tests live in the private `vldaft.data` repository.
+- Tests here are self-contained and use simulated or publicly available data.
 - C and Rust backends agree to machine precision on shared datasets.
 
 ## When modifying code
@@ -95,4 +93,3 @@ failure time regression model. *Biometrics*, 47(1), 281-288.
 
 - pkgdown site: <https://keaven.github.io/vldaft/>
 - Source: <https://github.com/keaven/vldaft>
-- Data repo (private): <https://github.com/keaven/vldaft.data>
