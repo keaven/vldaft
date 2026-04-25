@@ -53,6 +53,47 @@ test_that("Cure_Weibull analytic scores match finite differences when theta = 0"
   }
 })
 
+test_that("AFT and cure families handle left and interval censoring", {
+  y_left <- Surv(c(1, 2, 3, 4), c(1, 0, 1, 0), type = "left")
+  y_interval <- Surv(c(1, 2, 3, 4, 4), c(2, Inf, 3, 5, NA),
+                     type = "interval2")
+
+  aft <- AFT_Weibull(theta = 0)
+  cure <- Cure_Weibull(theta = 0)
+  par_aft <- list(mu = rep(0.1, 5), sigma = rep(1.1, 5))
+  par_cure <- list(mu = rep(0.1, 5), sigma = rep(1.1, 5), nu = rep(0.25, 5))
+
+  expect_true(all(is.finite(aft$pdf(y_left, list(mu = rep(0.1, 4),
+                                                  sigma = rep(1.1, 4)),
+                                      log = TRUE))))
+  expect_true(all(is.finite(aft$pdf(y_interval, par_aft, log = TRUE))))
+  expect_true(all(is.finite(cure$pdf(y_interval, par_cure, log = TRUE))))
+  expect_true(all(is.finite(aft$score$mu(y_interval, par_aft))))
+  expect_true(all(is.finite(cure$score$nu(y_interval, par_cure))))
+})
+
+test_that("interval-censored cure-family scores match finite differences", {
+  y <- Surv(c(1, 2, 3, 4, 4), c(2, Inf, 3, 5, NA), type = "interval2")
+  fam <- Cure_Weibull(theta = 0)
+  par <- list(
+    mu = c(0.1, 0.2, -0.1, 0.3, 0.4),
+    sigma = rep(1.1, 5),
+    nu = rep(0.25, 5)
+  )
+  total_loglik <- function(pars) {
+    sum(fam$pdf(y, pars, log = TRUE))
+  }
+
+  for (target in c("mu", "sigma", "nu")) {
+    eps <- 1e-6
+    ll_plus <- total_loglik(shift_link_parameter(par, target, eps))
+    ll_minus <- total_loglik(shift_link_parameter(par, target, -eps))
+    num_grad <- (ll_plus - ll_minus) / (2 * eps)
+    ana_grad <- sum(fam$score[[target]](y, par))
+    expect_equal(ana_grad, num_grad, tolerance = 1e-4)
+  }
+})
+
 test_that("Cure_Exponential likelihood recovers intercept-only parameters", {
   set.seed(21)
   n <- 400

@@ -7,7 +7,7 @@
 /* Module-wide model state.
    The C backend is intentionally single-threaded; protect any concurrent
    access at the R level. */
-int  m = 0, scale = 0, mlo = 0, mlo1 = 0, ntheta = 0, tcol = 0, cencol = 0,
+int  m = 0, scale = 0, mlo = 0, mlo1 = 0, ntheta = 0, tcol = 0, t2col = -1, cencol = 0,
      *pscale = NULL, *ploc = NULL, npar = 0, nreoff = 1, *reoff = NULL,
      madj = 1, rgtcen = -1, spmlo1 = 0, spmlo = 0,
      startcol = -1, t0col = 0;
@@ -28,6 +28,7 @@ double nu = 0.0, enu = 0.0;
      [scale+mlo + 1]             : event indicator (1 event, 0 right-cens, -1 left-cens)
      [scale+mlo + 2]             : left-truncation flag (1 if truncated)
      [scale+mlo + 3]             : log(start time), only valid when flag == 1
+     [scale+mlo + 4]             : log(interval upper time), only valid when event == 2
 */
 double *getrec(void)
 {
@@ -51,11 +52,13 @@ double *getrec(void)
     y[spml + 1] = 0.;
     for (i = 0; i < nreoff; i++) if ((int)xp[cencol] == reoff[i]) y[spml + 1] = 1.;
     if ((int)xp[cencol] == rgtcen) y[spml + 1] = -1.;
+    if ((int)xp[cencol] == 2) y[spml + 1] = 2.;
     if (startcol >= 0 && xp[t0col] > 0.)
     {   y[spml + 2] = (double)(int)xp[startcol];
         if (y[spml + 2] == 1.) y[spml + 3] = log(xp[t0col]);
     }
     else y[spml + 2] = 0.;
+    y[spml + 4] = (t2col >= 0 && y[spml + 1] == 2.) ? log(xp[t2col]) : 0.;
     xindex += m;
     return y;
 }
@@ -65,7 +68,7 @@ void zrewind(void) { xindex = 0; }
 
 /* setupls: fill in module-wide model configuration. */
 int setupls(int ncol, long nrec, int nlo, int nsc, int nth, int time,
-            int censor, int *p1, int *p2, int nevent, int *event,
+            int time2, int censor, int *p1, int *p2, int nevent, int *event,
             int stcol, int time0)
 {
     m       = ncol;
@@ -80,6 +83,7 @@ int setupls(int ncol, long nrec, int nlo, int nsc, int nth, int time,
     pscale  = p2;
     ploc    = p1;
     tcol    = time;
+    t2col   = time2;
     t0col   = time0;
     startcol = stcol;
     cencol  = censor;
@@ -100,7 +104,7 @@ int data_from_r(double *rdata, int nobs, int ncol)
 
     /* R_alloc memory is reclaimed at the end of each .Call(), so always
        re-allocate; do not rely on the previous call's pointers. */
-    y    = (double *)R_alloc(MAXCOV + 4, sizeof(double));
+    y    = (double *)R_alloc(MAXCOV + 5, sizeof(double));
     x    = (double *)R_alloc((size_t)nobs * ncol, sizeof(double));
     xbar = (double *)R_alloc(ncol, sizeof(double));
     for (j = 0; j < ncol; j++) xbar[j] = 0.;

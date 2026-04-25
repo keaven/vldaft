@@ -5,7 +5,8 @@
 #' through a theta polynomial.
 #'
 #' @param formula A formula of the form
-#'   \code{Surv(time, status) ~ loc_vars | scale_vars}.
+#'   \code{Surv(time, status) ~ loc_vars | scale_vars}. The response may use
+#'   right, left, counting-process, or interval-censored \code{Surv()} forms.
 #'   Left of \code{|} specifies location (mu) covariates, right specifies
 #'   scale (gamma) covariates. If no \code{|} is present, all covariates
 #'   enter the location model and the scale has an intercept only.
@@ -32,7 +33,10 @@
 #'   iterations, default 50), \code{maxhalv} (max step halvings, default 20).
 #' @param adjust Logical; center covariates (default \code{TRUE}). Centering
 #'   does not change location coefficients but does shift the interpretation
-#'   of \eqn{\mu^*} used by the theta polynomial.
+#'   of \eqn{\mu^*} used by the theta polynomial. The fitted object stores the
+#'   training centering constants, reports coefficients back on the raw
+#'   covariate scale, and reuses the original training centering inside
+#'   \code{predict()}.
 #' @param backend Character, \code{"c"} (default) or \code{"rust"}.
 #'
 #' @details
@@ -54,13 +58,15 @@
 #' }
 #'
 #' The returned log-likelihood is on the log-time scale (no Jacobian). To
-#' compare with \code{survival::survreg}, add
+#' compare with \code{survival::survreg}, subtract
 #' \eqn{\sum_i d_i \log(t_i)}{sum_i d_i log(t_i)}; \code{logLik()} exposes this
 #' via its \code{jacobian} argument.
 #'
 #' The compiled back end has a compile-time cap of \code{MAXCOV = 30}
 #' parameters (scale + location + theta). The R wrapper checks this before
-#' dispatching.
+#' dispatching. The C and Rust back ends support right, left, counting-process,
+#' and interval-censored responses. Cure-model fits use BFGS with a numerical
+#' Hessian around the compiled cure likelihood/score evaluator.
 #'
 #' @return An object of class \code{"vldaft"}.
 #'
@@ -71,6 +77,7 @@
 #' @importFrom survival Surv
 #' @importFrom stats model.frame model.matrix model.response update
 #'   as.formula pnorm dnorm dgamma pgamma printCoefmat terms delete.response
+#'   setNames
 #' @useDynLib vldaft, .registration = TRUE
 #' @export
 vldaft <- function(formula, data,
@@ -119,10 +126,6 @@ vldaft <- function(formula, data,
     } else {
       cure_mm <- model.matrix(~ 1, data.frame(.y = rep(1, nrow(data))))
     }
-    if (backend != "c") {
-      stop("Cure-model fitting is currently implemented only for backend = 'c'",
-           call. = FALSE)
-    }
   } else {
     cure_mm <- NULL
   }
@@ -137,6 +140,14 @@ vldaft <- function(formula, data,
   if (surv_type == "right") {
     time_var <- surv_obj[, "time"]
     status_var <- surv_obj[, "status"]
+    time2_var <- rep(NA_real_, n)
+    start_var <- rep(0, n)
+    t0_var <- rep(0, n)
+    has_start <- FALSE
+  } else if (surv_type == "left") {
+    time_var <- surv_obj[, "time"]
+    status_var <- ifelse(surv_obj[, "status"] == 1, 1L, -1L)
+    time2_var <- rep(NA_real_, n)
     start_var <- rep(0, n)
     t0_var <- rep(0, n)
     has_start <- FALSE
@@ -144,25 +155,40 @@ vldaft <- function(formula, data,
     t0_var <- surv_obj[, "start"]
     time_var <- surv_obj[, "stop"]
     status_var <- surv_obj[, "status"]
+    time2_var <- rep(NA_real_, n)
     start_var <- as.integer(t0_var > 0)
     has_start <- TRUE
+  } else if (surv_type == "interval") {
+    raw_status <- surv_obj[, "status"]
+    time_var <- surv_obj[, "time1"]
+    time2_var <- ifelse(raw_status == 3, surv_obj[, "time2"], NA_real_)
+    status_var <- ifelse(raw_status == 1, 1L,
+                         ifelse(raw_status == 2, -1L,
+                                ifelse(raw_status == 3, 2L, 0L)))
+    start_var <- rep(0, n)
+    t0_var <- rep(0, n)
+    has_start <- FALSE
   } else {
-    stop("Only 'right' and 'counting' Surv types are supported", call. = FALSE)
+    stop("Only 'right', 'left', 'counting', and 'interval' Surv types are supported",
+         call. = FALSE)
   }
 
-  if (any(time_var <= 0))
+  if (any(!is.finite(time_var) | time_var <= 0))
     stop("Survival times must be strictly positive", call. = FALSE)
+  is_interval_row <- status_var == 2L
+  if (any(is_interval_row & (!is.finite(time2_var) | time2_var <= time_var)))
+    stop("Interval-censored upper bounds must be finite and greater than lower bounds",
+         call. = FALSE)
+
+  if (cure && backend != "c") {
+    stop("Cure-model fitting is currently implemented only for backend = 'c'",
+         call. = FALSE)
+  }
 
   loc_names <- colnames(loc_mm)
   nloc <- ncol(loc_mm)
   nsc <- ncol(scale_mm)
   ncu <- if (cure) ncol(cure_mm) else 0L
-
-  if (cure && isTRUE(adjust)) {
-    loc_mm <- .vldaft_center_model_matrix(loc_mm)
-    scale_mm <- .vldaft_center_model_matrix(scale_mm)
-    if (cure) cure_mm <- .vldaft_center_model_matrix(cure_mm)
-  }
 
   if (theta > 0 && !is.null(theta_vars)) {
     tv_mm <- model.matrix(theta_vars, data)
@@ -179,6 +205,16 @@ vldaft <- function(formula, data,
     mlo1_val <- -1L
   }
 
+  scale_means <- if (isTRUE(adjust)) .vldaft_block_means(scale_mm) else .vldaft_zero_block_means(scale_mm)
+  loc_means   <- if (isTRUE(adjust)) .vldaft_block_means(loc_mm) else .vldaft_zero_block_means(loc_mm)
+  cure_means  <- if (cure && isTRUE(adjust)) .vldaft_block_means(cure_mm) else .vldaft_zero_block_means(cure_mm)
+
+  if (cure && isTRUE(adjust)) {
+    loc_mm <- .vldaft_apply_training_centering(loc_mm, loc_means)
+    scale_mm <- .vldaft_apply_training_centering(scale_mm, scale_means)
+    if (cure) cure_mm <- .vldaft_apply_training_centering(cure_mm, cure_means)
+  }
+
   total_par <- nsc + nloc + theta + ncu
   if (total_par > 30L)
     stop(sprintf(
@@ -190,7 +226,7 @@ vldaft <- function(formula, data,
          call. = FALSE)
   }
 
-  ncol_total <- nsc + nloc + ncu + 4L
+  ncol_total <- nsc + nloc + ncu + 5L
   data_matrix <- matrix(0, nrow = n, ncol = ncol_total)
   data_matrix[, seq_len(nsc)]                   <- scale_mm
   data_matrix[, nsc + seq_len(nloc)]            <- loc_mm
@@ -201,6 +237,7 @@ vldaft <- function(formula, data,
   data_matrix[, nsc + nloc + ncu + 2L]          <- status_var
   data_matrix[, nsc + nloc + ncu + 3L]          <- start_var
   data_matrix[, nsc + nloc + ncu + 4L]          <- t0_var
+  data_matrix[, nsc + nloc + ncu + 5L]          <- ifelse(is.na(time2_var), 0, time2_var)
 
   scale_cols <- as.integer(0:(nsc - 1))
   loc_cols   <- as.integer(nsc:(nsc + nloc - 1))
@@ -209,6 +246,7 @@ vldaft <- function(formula, data,
   event_col  <- as.integer(nsc + nloc + ncu + 1L)
   start_col_idx <- if (has_start) as.integer(nsc + nloc + ncu + 2) else -1L
   t0_col_idx    <- if (has_start) as.integer(nsc + nloc + ncu + 3) else -1L
+  time2_col      <- if (surv_type == "interval") as.integer(nsc + nloc + ncu + 4) else -1L
 
   dist_code <- switch(dist,
     weibull = 1L, logistic = 2L, normal = 3L, cauchy = 4L, gamma = 5L)
@@ -216,11 +254,13 @@ vldaft <- function(formula, data,
   ctrl <- list(acc = 1e-4, maxiter = 50L, maxhalv = 20L)
   ctrl[names(control)] <- control
 
+  backend_used <- backend
   if (cure) {
     fit <- .fit_vldaft_cure(
       data_matrix = data_matrix,
       time_col = time_col,
       event_col = event_col,
+      time2_col = time2_col,
       start_col_idx = start_col_idx,
       t0_col_idx = t0_col_idx,
       loc_cols = loc_cols,
@@ -234,30 +274,61 @@ vldaft <- function(formula, data,
       control = ctrl
     )
   } else {
-    call_name <- if (backend == "rust") "wrap__vldaft_fit_rust" else "vldaft_fit"
-    fit <- .Call(call_name,
-      data_matrix,
-      time_col,
-      event_col,
-      1L,
-      -1L,
-      start_col_idx,
-      t0_col_idx,
-      loc_cols,
-      scale_cols,
-      theta,
-      as.integer(mlo1_val),
-      dist_code,
-      as.double(nu),
-      if (!is.null(init)) as.double(init) else NULL,
-      as.double(ctrl$acc),
-      as.integer(ctrl$maxiter),
-      as.integer(ctrl$maxhalv),
-      as.integer(isTRUE(adjust))
-    )
+    if (backend == "rust") {
+      fit <- .Call("wrap__vldaft_fit_rust",
+        data_matrix,
+        time_col,
+        time2_col,
+        event_col,
+        1L,
+        -1L,
+        start_col_idx,
+        t0_col_idx,
+        loc_cols,
+        scale_cols,
+        theta,
+        as.integer(mlo1_val),
+        dist_code,
+        as.double(nu),
+        if (!is.null(init)) as.double(init) else NULL,
+        as.double(ctrl$acc),
+        as.integer(ctrl$maxiter),
+        as.integer(ctrl$maxhalv),
+        as.integer(isTRUE(adjust))
+      )
+    } else {
+      fit <- .Call("vldaft_fit",
+        data_matrix,
+        time_col,
+        time2_col,
+        event_col,
+        1L,
+        -1L,
+        start_col_idx,
+        t0_col_idx,
+        loc_cols,
+        scale_cols,
+        theta,
+        as.integer(mlo1_val),
+        dist_code,
+        as.double(nu),
+        if (!is.null(init)) as.double(init) else NULL,
+        as.double(ctrl$acc),
+        as.integer(ctrl$maxiter),
+        as.integer(ctrl$maxhalv),
+        as.integer(isTRUE(adjust))
+      )
+    }
   }
 
-  if (fit$iter < 0) {
+  if (!is.null(fit$optim_convergence) && fit$optim_convergence != 0L) {
+    conv_msg <- if (!is.null(fit$optim_message) && nzchar(fit$optim_message)) {
+      fit$optim_message
+    } else {
+      paste("optimizer convergence code", fit$optim_convergence)
+    }
+    warning("vldaft optimizer did not converge: ", conv_msg, call. = FALSE)
+  } else if (fit$iter < 0) {
     conv_msg <- switch(as.character(fit$iter),
       "-1" = "Unable to compute partials (large exponent)",
       "-2" = "Unable to compute partials",
@@ -280,6 +351,22 @@ vldaft <- function(formula, data,
   rownames(fit$vcov) <- coef_names
   colnames(fit$vcov) <- coef_names
 
+  fit$coefficients_internal <- fit$coefficients
+  fit$vcov_internal <- fit$vcov
+  transformed <- .vldaft_transform_parameters(
+    coefficients = fit$coefficients_internal,
+    vcov = fit$vcov_internal,
+    scale_names = colnames(scale_mm),
+    loc_names = colnames(loc_mm),
+    cure_names = if (cure) colnames(cure_mm) else character(0),
+    scale_means = scale_means,
+    loc_means = loc_means,
+    cure_means = cure_means,
+    adjust = isTRUE(adjust)
+  )
+  fit$coefficients <- transformed$coefficients
+  fit$vcov <- transformed$vcov
+
   nevent <- sum(status_var == 1)
 
   result <- list(
@@ -294,20 +381,30 @@ vldaft <- function(formula, data,
     nevent       = nevent,
     dist         = dist,
     theta        = theta,
+    mlo1         = mlo1_val,
     theta_vars   = theta_vars,
     nu           = nu,
     cure         = cure,
     adjust       = isTRUE(adjust),
     formula      = formula,
     call         = cl,
-    backend      = backend,
+    backend      = backend_used,
     scale_names  = colnames(scale_mm),
+    scale_means  = scale_means,
     loc_names    = colnames(loc_mm),
+    loc_means    = loc_means,
     cure_names   = if (cure) colnames(cure_mm) else character(0),
+    cure_means   = cure_means,
+    coefficients_internal = fit$coefficients_internal,
+    vcov_internal = fit$vcov_internal,
     time         = time_var,
+    time2        = time2_var,
     status       = status_var,
     start        = t0_var,
-    converged    = fit$iter > 0
+    optim_convergence = if (!is.null(fit$optim_convergence)) fit$optim_convergence else NA_integer_,
+    optim_message = if (!is.null(fit$optim_message)) fit$optim_message else NA_character_,
+    hessian_method = if (!is.null(fit$hessian_method)) fit$hessian_method else NA_character_,
+    converged    = if (!is.null(fit$converged)) isTRUE(fit$converged) else fit$iter > 0
   )
   class(result) <- "vldaft"
   result
@@ -332,6 +429,13 @@ parse_vldaft_formula <- function(formula, data) {
   mf <- model.frame(update(formula, . ~ 1), data = data)
   response <- model.response(mf)
 
+  c(list(response = response), .vldaft_rhs_formulas(formula))
+}
+
+.vldaft_rhs_formulas <- function(formula) {
+  if (!inherits(formula, "formula") || length(formula) != 3L)
+    stop("`formula` must be a two-sided formula", call. = FALSE)
+
   rhs <- formula[[3L]]
   rhs_parts <- .flatten_vldaft_rhs(rhs)
 
@@ -350,8 +454,7 @@ parse_vldaft_formula <- function(formula, data) {
          call. = FALSE)
   }
 
-  list(response = response,
-       loc_formula = loc_formula,
+  list(loc_formula = loc_formula,
        scale_formula = scale_formula,
        cure_formula = cure_formula)
 }
@@ -364,17 +467,74 @@ parse_vldaft_formula <- function(formula, data) {
   }
 }
 
-.vldaft_center_model_matrix <- function(mm) {
+.vldaft_zero_block_means <- function(mm) {
+  if (is.null(mm)) return(stats::setNames(numeric(0), character(0)))
+  stats::setNames(rep(0, ncol(mm)), colnames(mm))
+}
+
+.vldaft_block_means <- function(mm) {
+  if (is.null(mm)) return(stats::setNames(numeric(0), character(0)))
   mm <- as.matrix(mm)
-  if (!ncol(mm)) return(mm)
-  intercept_col <- which(colnames(mm) == "(Intercept)")
+  means <- .vldaft_zero_block_means(mm)
+  if (!ncol(mm)) return(means)
   idx <- seq_len(ncol(mm))
+  intercept_col <- which(colnames(mm) == "(Intercept)")
   if (length(intercept_col) == 1L) idx <- setdiff(idx, intercept_col)
   if (length(idx)) {
-    mm[, idx] <- sweep(mm[, idx, drop = FALSE], 2, colMeans(mm[, idx, drop = FALSE]),
-                       FUN = "-")
+    means[idx] <- colMeans(mm[, idx, drop = FALSE])
+  }
+  means
+}
+
+.vldaft_center_model_matrix <- function(mm) {
+  mm <- .vldaft_apply_training_centering(mm, .vldaft_block_means(mm))
+  mm
+}
+
+.vldaft_apply_training_centering <- function(mm, means) {
+  if (is.null(mm)) return(mm)
+  mm <- as.matrix(mm)
+  if (!ncol(mm) || !length(means)) return(mm)
+  idx_names <- setdiff(intersect(colnames(mm), names(means)), "(Intercept)")
+  if (length(idx_names)) {
+    mm[, idx_names] <- sweep(mm[, idx_names, drop = FALSE], 2, means[idx_names], FUN = "-")
   }
   mm
+}
+
+.vldaft_transform_parameters <- function(coefficients, vcov, scale_names, loc_names,
+                                         cure_names, scale_means, loc_means,
+                                         cure_means, adjust) {
+  if (!isTRUE(adjust)) {
+    return(list(coefficients = coefficients, vcov = vcov))
+  }
+
+  coef_names <- names(coefficients)
+  Tmat <- diag(length(coefficients))
+  rownames(Tmat) <- coef_names
+  colnames(Tmat) <- coef_names
+
+  add_block_transform <- function(prefix, block_names, means) {
+    if (!length(block_names)) return()
+    int_pos <- match("(Intercept)", block_names, nomatch = 0L)
+    if (int_pos == 0L) return()
+    idx <- match(paste0(prefix, block_names), coef_names)
+    slope_pos <- setdiff(seq_along(block_names), int_pos)
+    if (!length(slope_pos)) return()
+    Tmat[idx[int_pos], idx[slope_pos]] <<- -unname(means[block_names[slope_pos]])
+  }
+
+  add_block_transform("gamma:", scale_names, scale_means)
+  add_block_transform("eta:", loc_names, loc_means)
+  add_block_transform("cure:", cure_names, cure_means)
+
+  coef_raw <- as.numeric(Tmat %*% coefficients)
+  names(coef_raw) <- coef_names
+  vcov_raw <- Tmat %*% vcov %*% t(Tmat)
+  rownames(vcov_raw) <- coef_names
+  colnames(vcov_raw) <- coef_names
+
+  list(coefficients = coef_raw, vcov = vcov_raw)
 }
 
 .vldaft_cure_dist_code <- function(dist) {
@@ -383,7 +543,7 @@ parse_vldaft_formula <- function(formula, data) {
          stop("Unsupported cure-model distribution: ", dist, call. = FALSE))
 }
 
-.fit_vldaft_cure <- function(data_matrix, time_col, event_col, start_col_idx,
+.fit_vldaft_cure <- function(data_matrix, time_col, event_col, time2_col, start_col_idx,
                              t0_col_idx, loc_cols, scale_cols, cure_cols,
                              theta, mlo1_val, dist, base_nu, init, control) {
   nobs <- nrow(data_matrix)
@@ -425,6 +585,7 @@ parse_vldaft_formula <- function(formula, data) {
       data_matrix,
       as.integer(time_col),
       as.integer(event_col),
+      as.integer(time2_col),
       as.integer(start_col_idx),
       as.integer(t0_col_idx),
       as.integer(loc_cols),
@@ -485,6 +646,22 @@ parse_vldaft_formula <- function(formula, data) {
     iter = opt$counts[["function"]],
     npar = expected_len,
     nobs = nobs,
+    optim_convergence = opt$convergence,
+    optim_message = if (is.null(opt$message)) "" else opt$message,
+    hessian_method = "optimHess",
     converged = opt$convergence == 0
   )
+}
+
+.vldaft_log1mexp <- function(logx) {
+  safe_logx <- pmin(logx, 0)
+  out <- log1p(-exp(safe_logx))
+  use_expm1 <- safe_logx > -log(2)
+  out[use_expm1] <- log(-expm1(safe_logx[use_expm1]))
+  out[logx >= 0] <- -Inf
+  out
+}
+
+.vldaft_logdiffexp <- function(log_hi, log_lo) {
+  log_hi + .vldaft_log1mexp(pmin(log_lo - log_hi, 0))
 }

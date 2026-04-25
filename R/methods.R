@@ -124,11 +124,12 @@ vcov.vldaft <- function(object, ...) object$vcov
 logLik.vldaft <- function(object, jacobian = FALSE, ...) {
   ll <- object$loglik
   if (isTRUE(jacobian)) {
-    d <- object$status
+    d_raw <- object$status
     t <- object$time
-    if (is.null(d) || is.null(t))
+    if (is.null(d_raw) || is.null(t))
       stop("logLik(jacobian = TRUE) needs time/status stored on the fit; ",
            "refit with the current version of vldaft().", call. = FALSE)
+    d <- d_raw == 1L
     ll <- ll - sum(d * log(t))
   }
   attr(ll, "df") <- object$npar
@@ -139,9 +140,8 @@ logLik.vldaft <- function(object, jacobian = FALSE, ...) {
 
 
 #' @rdname vldaft-methods
-#' @param newdata Optional data frame for \code{predict}. If omitted, the
-#'   training data is implied via the stored \code{time}/\code{status};
-#'   supply \code{newdata} to predict on new covariates.
+#' @param newdata Data frame containing the covariates needed for prediction.
+#'   This argument is required.
 #' @param type One of \code{"lp"} (linear predictor for mu, the default),
 #'   \code{"logsigma"}, \code{"sigma"}, \code{"median"} (predicted log-time
 #'   plus \code{sigma * q0.5} where \code{q0.5} is the median of the
@@ -157,7 +157,7 @@ predict.vldaft <- function(object, newdata,
   if (missing(newdata))
     stop("`newdata` is required for predict.vldaft()", call. = FALSE)
 
-  f <- parse_vldaft_formula(object$formula, newdata)
+  f <- .vldaft_rhs_formulas(object$formula)
   loc_mm   <- stats::model.matrix(f$loc_formula, newdata)
   if (!is.null(f$scale_formula)) {
     scale_mm <- stats::model.matrix(f$scale_formula, newdata)
@@ -170,17 +170,20 @@ predict.vldaft <- function(object, newdata,
     } else {
       cure_mm <- stats::model.matrix(~ 1, data.frame(.y = rep(1, nrow(newdata))))
     }
-    if (isTRUE(object$adjust)) {
-      loc_mm <- .vldaft_center_model_matrix(loc_mm)
-      scale_mm <- .vldaft_center_model_matrix(scale_mm)
-      cure_mm <- .vldaft_center_model_matrix(cure_mm)
+  }
+  if (isTRUE(object$adjust)) {
+    loc_mm <- .vldaft_apply_training_centering(loc_mm, object$loc_means)
+    scale_mm <- .vldaft_apply_training_centering(scale_mm, object$scale_means)
+    if (isTRUE(object$cure)) {
+      cure_mm <- .vldaft_apply_training_centering(cure_mm, object$cure_means)
     }
   }
 
-  eta_cf   <- object$coefficients[grep("^eta:", names(object$coefficients))]
-  gamma_cf <- object$coefficients[grep("^gamma:", names(object$coefficients))]
-  theta_cf <- object$coefficients[grep("^theta[0-9]+$", names(object$coefficients))]
-  cure_cf  <- object$coefficients[grep("^cure:", names(object$coefficients))]
+  coef_source <- if (!is.null(object$coefficients_internal)) object$coefficients_internal else object$coefficients
+  eta_cf   <- coef_source[grep("^eta:", names(coef_source))]
+  gamma_cf <- coef_source[grep("^gamma:", names(coef_source))]
+  theta_cf <- coef_source[grep("^theta[0-9]+$", names(coef_source))]
+  cure_cf  <- coef_source[grep("^cure:", names(coef_source))]
 
   loc_mm   <- loc_mm[, sub("^eta:", "", names(eta_cf)), drop = FALSE]
   scale_mm <- scale_mm[, sub("^gamma:", "", names(gamma_cf)), drop = FALSE]
@@ -191,7 +194,14 @@ predict.vldaft <- function(object, newdata,
   mu <- as.numeric(loc_mm %*% eta_cf)
   log_sigma <- as.numeric(scale_mm %*% gamma_cf)
   if (length(theta_cf)) {
-    mu_c <- mu - mean(mu)
+    mlo1 <- if (!is.null(object$mlo1)) object$mlo1 else 0L
+    if (mlo1 < 0L) {
+      mu_c <- mu - mean(mu)
+    } else {
+      theta_loc <- loc_mm[, seq.int(mlo1 + 1L, ncol(loc_mm)), drop = FALSE]
+      theta_eta <- eta_cf[seq.int(mlo1 + 1L, length(eta_cf))]
+      mu_c <- as.numeric(theta_loc %*% theta_eta)
+    }
     for (k in seq_along(theta_cf)) {
       log_sigma <- log_sigma + theta_cf[k] * mu_c^k
     }

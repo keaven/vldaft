@@ -56,8 +56,8 @@ A \code{gamlss2.family} object.
 \description{
 These functions create \code{gamlss2} family objects for accelerated
 failure time models and their Poisson-mixture cure-model extensions.
-They handle \code{Surv()} responses with right censoring and left
-truncation (counting-process form).
+They handle \code{Surv()} responses with right censoring, left censoring,
+interval censoring, and left truncation (counting-process form).
 }
 \details{
 The plain AFT model is

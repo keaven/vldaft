@@ -20,7 +20,8 @@ vldaft(
 }
 \arguments{
 \item{formula}{A formula of the form
-\code{Surv(time, status) ~ loc_vars | scale_vars}.
+\code{Surv(time, status) ~ loc_vars | scale_vars}. The response may use
+right, left, counting-process, or interval-censored \code{Surv()} forms.
 Left of \code{|} specifies location (mu) covariates, right specifies
 scale (gamma) covariates. If no \code{|} is present, all covariates
 enter the location model and the scale has an intercept only.}
@@ -56,7 +57,10 @@ iterations, default 50), \code{maxhalv} (max step halvings, default 20).}
 
 \item{adjust}{Logical; center covariates (default \code{TRUE}). Centering
 does not change location coefficients but does shift the interpretation
-of \eqn{\mu^*} used by the theta polynomial.}
+of \eqn{\mu^*} used by the theta polynomial. The fitted object stores the
+training centering constants, reports coefficients back on the raw
+covariate scale, and reuses the original training centering inside
+\code{predict()}.}
 
 \item{backend}{Character, \code{"c"} (default) or \code{"rust"}.}
 }
@@ -87,13 +91,15 @@ Coefficient names are prefixed to mark their role:
 }
 
 The returned log-likelihood is on the log-time scale (no Jacobian). To
-compare with \code{survival::survreg}, add
+compare with \code{survival::survreg}, subtract
 \eqn{\sum_i d_i \log(t_i)}{sum_i d_i log(t_i)}; \code{logLik()} exposes this
 via its \code{jacobian} argument.
 
 The compiled back end has a compile-time cap of \code{MAXCOV = 30}
 parameters (scale + location + theta). The R wrapper checks this before
-dispatching.
+dispatching. The C and Rust back ends support right, left, counting-process,
+and interval-censored responses. Cure-model fits use BFGS with a numerical
+Hessian around the compiled cure likelihood/score evaluator.
 }
 \references{
 Anderson, K.M. (1991). A nonproportional hazards Weibull accelerated failure

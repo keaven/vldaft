@@ -49,13 +49,13 @@ static int choose_dist(int dist_code, int (**dist_fn)(int, double, double *))
 }
 
 SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
-                      SEXP s_start_col, SEXP s_t0_col,
+                      SEXP s_time2_col, SEXP s_start_col, SEXP s_t0_col,
                       SEXP s_loc_cols, SEXP s_scale_cols, SEXP s_cure_cols,
                       SEXP s_theta, SEXP s_mlo1, SEXP s_dist, SEXP s_base_nu,
                       SEXP s_par, SEXP s_fixed_sigma)
 {
     int nobs, nloc, nsc, ncu, theta, mlo1, dist_code, fixed_sigma;
-    int time_col, event_col, start_col, t0_col;
+    int time_col, event_col, time2_col, start_col, t0_col;
     int i, j;
     int *loc_cols, *scale_cols, *cure_cols;
     int (*dist_fn)(int, double, double *) = NULL;
@@ -68,6 +68,7 @@ SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
     x = REAL(s_data);
     time_col = INTEGER(s_time_col)[0];
     event_col = INTEGER(s_event_col)[0];
+    time2_col = INTEGER(s_time2_col)[0];
     start_col = INTEGER(s_start_col)[0];
     t0_col = INTEGER(s_t0_col)[0];
     loc_cols = INTEGER(s_loc_cols);
@@ -110,11 +111,14 @@ SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
         double xloc[MAXCOV], xsc[MAXCOV], xcu[MAXCOV];
         double mustar = 0.0, w;
         double logf, dlogf, logS, dlogS, S, F;
+        double logf2, dlogf2, logS2, dlogS2, S2, F2, w2 = 0.0;
         double logf0, dlogf0, logS0, dlogS0, S0, F0;
+        double cure_surv = 0.0, cure_surv2 = 0.0, left_denom = 1.0, interval_denom = 1.0;
         int p_scale_offset = 0;
         int p_loc_offset;
         int p_cure_offset;
         int p_theta_offset;
+        int mlo_start = (mlo1 < 0) ? 0 : mlo1;
 
         if (!fixed_sigma)
         {
@@ -142,7 +146,8 @@ SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
         }
 
         mustar = 0.0;
-        for (j = mlo1; j < nloc; j++) mustar += par[p_loc_offset + j] * xloc[j];
+        if (theta > 0)
+            for (j = mlo_start; j < nloc; j++) mustar += par[p_loc_offset + j] * xloc[j];
 
         theta_pows[0] = mustar;
         if (theta > 0)
@@ -171,9 +176,34 @@ SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
         if (cure_p <= DBL_EPSILON) cure_p = DBL_EPSILON;
         if (cure_p >= 1.0 - DBL_EPSILON) cure_p = 1.0 - DBL_EPSILON;
         tau = -log(cure_p);
+        cure_surv = exp(-tau * F);
+        if (event < 0)
+        {
+            left_denom = 1.0 - cure_surv;
+            if (left_denom <= DBL_EPSILON) left_denom = DBL_EPSILON;
+        }
+        if (event == 2)
+        {
+            if (time2_col < 0) error("vldaft_cure_eval: interval upper time missing");
+            w2 = (log(mat_get(x, nobs, i, time2_col)) - mu) / sigma_eff;
+            fill_baseline(dist_fn, w2, base_nu, &logf2, &dlogf2, &logS2, &dlogS2, &S2, &F2);
+            cure_surv2 = exp(-tau * F2);
+            interval_denom = cure_surv - cure_surv2;
+            if (interval_denom <= DBL_EPSILON) interval_denom = DBL_EPSILON;
+        }
+        else
+        {
+            logf2 = dlogf2 = logS2 = dlogS2 = 0.0;
+            S2 = 1.0;
+            F2 = 0.0;
+        }
 
         if (event == 1)
             total_ll += log(tau) + logf - logt - log_sigma_eff - tau * F;
+        else if (event == 2)
+            total_ll += log(interval_denom);
+        else if (event < 0)
+            total_ll += log(left_denom);
         else
             total_ll += -tau * F;
 
@@ -195,8 +225,19 @@ SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
             for (j = 0; j < nsc; j++)
             {
                 double dw = -w * xsc[j];
+                double dw2 = -w2 * xsc[j];
                 double event_score = dlogf * dw - xsc[j];
-                double score = ((event == 1) ? event_score : 0.0) + tau * S * dlogS * dw;
+                double surv_deriv = S * dlogS * dw;
+                double score;
+                if (event == 1)
+                    score = event_score + tau * surv_deriv;
+                else if (event == 2)
+                    score = (cure_surv * tau * surv_deriv -
+                             cure_surv2 * tau * S2 * dlogS2 * dw2) / interval_denom;
+                else if (event < 0)
+                    score = -cure_surv * tau * surv_deriv / left_denom;
+                else
+                    score = tau * surv_deriv;
                 if (has_start && t0 > 0.0)
                     score -= tau * S0 * dlogS0 * (-((log(t0) - mu) / sigma_eff) * xsc[j]);
                 grad[j] += score;
@@ -208,11 +249,23 @@ SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
             double dlogse = 0.0;
             double dw;
             double event_score, score;
-            if (j >= mlo1)
+            if (theta > 0 && j >= mlo_start)
                 dlogse = dlogse_dmustar * xloc[j];
             dw = -xloc[j] / sigma_eff - w * dlogse;
             event_score = dlogf * dw - dlogse;
-            score = ((event == 1) ? event_score : 0.0) + tau * S * dlogS * dw;
+            {
+                double dw2 = -xloc[j] / sigma_eff - w2 * dlogse;
+                double surv_deriv = S * dlogS * dw;
+                if (event == 1)
+                    score = event_score + tau * surv_deriv;
+                else if (event == 2)
+                    score = (cure_surv * tau * surv_deriv -
+                             cure_surv2 * tau * S2 * dlogS2 * dw2) / interval_denom;
+                else if (event < 0)
+                    score = -cure_surv * tau * surv_deriv / left_denom;
+                else
+                    score = tau * surv_deriv;
+            }
             if (has_start && t0 > 0.0)
             {
                 double w0 = (log(t0) - mu) / sigma_eff;
@@ -224,9 +277,16 @@ SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
 
         for (j = 0; j < ncu; j++)
         {
-            double score = ((event == 1) ?
-                              xcu[j] * ((1.0 - cure_p) * (F - 1.0 / tau)) :
-                              xcu[j] * ((1.0 - cure_p) * F));
+            double score;
+            if (event == 1)
+                score = xcu[j] * ((1.0 - cure_p) * (F - 1.0 / tau));
+            else if (event == 2)
+                score = xcu[j] * (cure_surv * (1.0 - cure_p) * F -
+                                  cure_surv2 * (1.0 - cure_p) * F2) / interval_denom;
+            else if (event < 0)
+                score = -xcu[j] * (cure_surv * (1.0 - cure_p) * F / left_denom);
+            else
+                score = xcu[j] * ((1.0 - cure_p) * F);
             if (has_start && t0 > 0.0)
                 score -= xcu[j] * ((1.0 - cure_p) * F0);
             grad[p_cure_offset + j] += score;
@@ -237,8 +297,19 @@ SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
             double mustar_pow = theta_pows[j];
             double dlogse = mustar_pow;
             double dw = -w * dlogse;
+            double dw2 = -w2 * dlogse;
             double event_score = dlogf * dw - dlogse;
-            double score = ((event == 1) ? event_score : 0.0) + tau * S * dlogS * dw;
+            double surv_deriv = S * dlogS * dw;
+            double score;
+            if (event == 1)
+                score = event_score + tau * surv_deriv;
+            else if (event == 2)
+                score = (cure_surv * tau * surv_deriv -
+                         cure_surv2 * tau * S2 * dlogS2 * dw2) / interval_denom;
+            else if (event < 0)
+                score = -cure_surv * tau * surv_deriv / left_denom;
+            else
+                score = tau * surv_deriv;
             if (has_start && t0 > 0.0)
             {
                 double w0 = (log(t0) - mu) / sigma_eff;

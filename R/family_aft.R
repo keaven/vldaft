@@ -2,8 +2,8 @@
 #'
 #' These functions create \code{gamlss2} family objects for accelerated
 #' failure time models and their Poisson-mixture cure-model extensions.
-#' They handle \code{Surv()} responses with right censoring and left
-#' truncation (counting-process form).
+#' They handle \code{Surv()} responses with right censoring, left censoring,
+#' interval censoring, and left truncation (counting-process form).
 #'
 #' @param theta Integer, order of the theta polynomial linking
 #'   \eqn{\log(\sigma)} to \eqn{\mu}. Default 0 (no coupling).
@@ -269,7 +269,17 @@ Cure_Exponential <- function() {
     if (stype == "right") {
       list(
         logt = log(y[, "time"]),
+        logt2 = rep(NA_real_, nrow(y)),
         status = y[, "status"],
+        t0 = rep(0, nrow(y)),
+        has_start = rep(FALSE, nrow(y)),
+        is_counting = FALSE
+      )
+    } else if (stype == "left") {
+      list(
+        logt = log(y[, "time"]),
+        logt2 = rep(NA_real_, nrow(y)),
+        status = ifelse(y[, "status"] == 1, 1L, -1L),
         t0 = rep(0, nrow(y)),
         has_start = rep(FALSE, nrow(y)),
         is_counting = FALSE
@@ -278,18 +288,32 @@ Cure_Exponential <- function() {
       t0 <- y[, "start"]
       list(
         logt = log(y[, "stop"]),
+        logt2 = rep(NA_real_, nrow(y)),
         status = y[, "status"],
         t0 = t0,
         has_start = t0 > 0,
         is_counting = TRUE
       )
+    } else if (stype == "interval") {
+      raw_status <- y[, "status"]
+      list(
+        logt = log(y[, "time1"]),
+        logt2 = ifelse(raw_status == 3, log(y[, "time2"]), NA_real_),
+        status = ifelse(raw_status == 1, 1L,
+                        ifelse(raw_status == 2, -1L,
+                               ifelse(raw_status == 3, 2L, 0L))),
+        t0 = rep(0, nrow(y)),
+        has_start = rep(FALSE, nrow(y)),
+        is_counting = FALSE
+      )
     } else {
-      stop("Only 'right' and 'counting' Surv types are supported",
+      stop("Only 'right', 'left', 'counting', and 'interval' Surv types are supported",
            call. = FALSE)
     }
   } else {
     list(
       logt = log(y),
+      logt2 = rep(NA_real_, length(y)),
       status = rep(1, length(y)),
       t0 = rep(0, length(y)),
       has_start = rep(FALSE, length(y)),
@@ -417,8 +441,9 @@ Cure_Exponential <- function() {
 }
 
 .aft_index_parameter <- function(x, idx) {
+  n <- if (is.logical(idx)) sum(idx) else length(idx)
   if (length(x) == 1L) {
-    rep(x, length(idx))
+    rep(x, n)
   } else {
     x[idx]
   }
@@ -436,6 +461,7 @@ Cure_Exponential <- function() {
   if (y_is_time) {
     resp <- list(
       logt = log(y),
+      logt2 = rep(NA_real_, length(y)),
       status = rep(0, length(y)),
       t0 = rep(0, length(y)),
       has_start = rep(FALSE, length(y)),
@@ -448,16 +474,37 @@ Cure_Exponential <- function() {
   w <- (resp$logt - mu) / scale_state$sigma_eff
   base <- .aft_baseline_quantities(w, dist = dist, dist_nu = dist_nu)
   base_event_ll <- base$logf - resp$logt - scale_state$log_sigma_eff
+  exact <- resp$status == 1L
+  right <- resp$status == 0L
+  left <- resp$status == -1L
+  interval <- resp$status == 2L
+  base2 <- NULL
 
   if (cure) {
     p <- .aft_cure_probability(par$nu)
     tau <- .aft_cure_tau(p)
-    ll <- ifelse(resp$status == 1,
-                 log(tau) + base_event_ll - tau * base$F,
-                 -tau * base$F)
-    survival <- exp(-tau * base$F)
+    log_surv <- -tau * base$F
+    ll <- numeric(length(resp$status))
+    ll[exact] <- log(tau[exact]) + base_event_ll[exact] - tau[exact] * base$F[exact]
+    ll[right] <- log_surv[right]
+    ll[left] <- .vldaft_log1mexp(log_surv[left])
+    if (any(interval)) {
+      w2 <- (resp$logt2[interval] - mu[interval]) / scale_state$sigma_eff[interval]
+      base2 <- .aft_baseline_quantities(w2, dist = dist, dist_nu = dist_nu)
+      log_surv2 <- -tau[interval] * base2$F
+      ll[interval] <- .vldaft_logdiffexp(log_surv[interval], log_surv2)
+    }
+    survival <- exp(log_surv)
   } else {
-    ll <- ifelse(resp$status == 1, base_event_ll, base$logS)
+    ll <- numeric(length(resp$status))
+    ll[exact] <- base_event_ll[exact]
+    ll[right] <- base$logS[right]
+    ll[left] <- .vldaft_log1mexp(base$logS[left])
+    if (any(interval)) {
+      w2 <- (resp$logt2[interval] - mu[interval]) / scale_state$sigma_eff[interval]
+      base2 <- .aft_baseline_quantities(w2, dist = dist, dist_nu = dist_nu)
+      ll[interval] <- .vldaft_logdiffexp(base$logS[interval], base2$logS)
+    }
     survival <- base$S
   }
 
@@ -481,7 +528,8 @@ Cure_Exponential <- function() {
     log_sigma_eff = scale_state$log_sigma_eff,
     mu_c = scale_state$mu_c,
     resp = resp,
-    base = base
+    base = base,
+    base2 = base2
   )
 }
 
@@ -494,9 +542,27 @@ Cure_Exponential <- function() {
   if (identical(target, "nu")) {
     p <- .aft_cure_probability(par$nu)
     tau <- .aft_cure_tau(p)
-    s <- ifelse(state$resp$status == 1,
-                -(1 - p) / tau + (1 - p) * state$base$F,
-                (1 - p) * state$base$F)
+    exact <- state$resp$status == 1L
+    right <- state$resp$status == 0L
+    left <- state$resp$status == -1L
+    interval <- state$resp$status == 2L
+    log_surv <- -tau * state$base$F
+    cure_surv <- exp(log_surv)
+    s <- numeric(length(state$resp$status))
+    s[exact] <- -(1 - p[exact]) / tau[exact] + (1 - p[exact]) * state$base$F[exact]
+    s[right] <- (1 - p[right]) * state$base$F[right]
+    s[left] <- -cure_surv[left] * (1 - p[left]) * state$base$F[left] /
+      pmax(1 - cure_surv[left], .Machine$double.eps)
+    if (any(interval)) {
+      p_i <- p[interval]
+      tau_i <- tau[interval]
+      log_surv1 <- log_surv[interval]
+      cure_surv1 <- exp(log_surv1)
+      cure_surv2 <- exp(-tau_i * state$base2$F)
+      denom <- pmax(cure_surv1 - cure_surv2, .Machine$double.eps)
+      s[interval] <- (cure_surv1 * (1 - p_i) * state$base$F[interval] -
+                        cure_surv2 * (1 - p_i) * state$base2$F) / denom
+    }
     if (state$resp$is_counting && any(state$resp$has_start)) {
       has_start <- state$resp$has_start
       w0 <- (log(state$resp$t0[has_start]) - state$mu[has_start]) /
@@ -520,13 +586,65 @@ Cure_Exponential <- function() {
 
   event_score <- state$base$dlogf * deriv$dw - deriv$dlogse
   surv_score <- state$base$dlogS * deriv$dw
+  surv_deriv <- state$base$S * surv_score
+  exact <- state$resp$status == 1L
+  right <- state$resp$status == 0L
+  left <- state$resp$status == -1L
+  interval <- state$resp$status == 2L
 
   if (cure) {
     tau <- .aft_cure_tau(par$nu)
-    s <- ifelse(state$resp$status == 1, event_score, 0) +
-      tau * state$base$S * surv_score
+    log_surv <- -tau * state$base$F
+    cure_surv <- exp(log_surv)
+    s <- numeric(length(state$resp$status))
+    s[exact] <- event_score[exact] + tau[exact] * surv_deriv[exact]
+    s[right] <- tau[right] * surv_deriv[right]
+    s[left] <- -cure_surv[left] * tau[left] * surv_deriv[left] /
+      pmax(1 - cure_surv[left], .Machine$double.eps)
+    if (any(interval)) {
+      w2 <- (state$resp$logt2[interval] - state$mu[interval]) /
+        state$sigma_eff[interval]
+      deriv2 <- .aft_parameter_derivatives(
+        target = target,
+        mu = state$mu[interval],
+        sigma_eff = state$sigma_eff[interval],
+        w = w2,
+        mu_c = state$mu_c[interval],
+        par = lapply(par, .aft_index_parameter, idx = interval),
+        theta = theta,
+        fixed_sigma = fixed_sigma
+      )
+      surv_score2 <- state$base2$dlogS * deriv2$dw
+      surv_deriv2 <- state$base2$S * surv_score2
+      cure_surv1 <- cure_surv[interval]
+      cure_surv2 <- exp(-tau[interval] * state$base2$F)
+      denom <- pmax(cure_surv1 - cure_surv2, .Machine$double.eps)
+      s[interval] <- (cure_surv1 * tau[interval] * surv_deriv[interval] -
+                        cure_surv2 * tau[interval] * surv_deriv2) / denom
+    }
   } else {
-    s <- ifelse(state$resp$status == 1, event_score, surv_score)
+    s <- numeric(length(state$resp$status))
+    s[exact] <- event_score[exact]
+    s[right] <- surv_score[right]
+    s[left] <- -surv_deriv[left] / pmax(state$base$F[left], .Machine$double.eps)
+    if (any(interval)) {
+      w2 <- (state$resp$logt2[interval] - state$mu[interval]) /
+        state$sigma_eff[interval]
+      deriv2 <- .aft_parameter_derivatives(
+        target = target,
+        mu = state$mu[interval],
+        sigma_eff = state$sigma_eff[interval],
+        w = w2,
+        mu_c = state$mu_c[interval],
+        par = lapply(par, .aft_index_parameter, idx = interval),
+        theta = theta,
+        fixed_sigma = fixed_sigma
+      )
+      surv_score2 <- state$base2$dlogS * deriv2$dw
+      surv_deriv2 <- state$base2$S * surv_score2
+      denom <- pmax(state$base$S[interval] - state$base2$S, .Machine$double.eps)
+      s[interval] <- (surv_deriv[interval] - surv_deriv2) / denom
+    }
   }
 
   if (state$resp$is_counting && any(state$resp$has_start)) {

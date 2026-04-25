@@ -46,7 +46,7 @@ int ac_tpar8   (int m, double *beta, double *db, double *ddb, double *ll1);
 
 /* Function prototypes - vldaft_cure_eval.c */
 SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
-                      SEXP s_start_col, SEXP s_t0_col,
+                      SEXP s_time2_col, SEXP s_start_col, SEXP s_t0_col,
                       SEXP s_loc_cols, SEXP s_scale_cols, SEXP s_cure_cols,
                       SEXP s_theta, SEXP s_mlo1, SEXP s_dist, SEXP s_base_nu,
                       SEXP s_par, SEXP s_fixed_sigma);
@@ -55,8 +55,8 @@ SEXP vldaft_cure_eval(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
 double *getrec(void);
 void    zrewind(void);
 int     setupls(int ncol, long nrec, int nlo, int nsc, int nth, int time,
-                int censor, int *p1, int *p2, int nevent, int *event,
-                int stcol, int time0);
+                int time2, int censor, int *p1, int *p2, int nevent,
+                int *event, int stcol, int time0);
 int     data_from_r(double *rdata, int nobs, int ncol);
 
 #endif /* RJ8DEF_H */
