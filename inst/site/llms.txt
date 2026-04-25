@@ -58,6 +58,23 @@ Weibull, logistic, normal, Cauchy, gamma.
 Right censoring, left censoring, interval censoring, and left truncation
 (delayed entry).
 
+## Cure models
+
+- `vldaft(cure = TRUE)` fits Poisson-mixture cure models around the
+  supported AFT baselines.
+- Standalone cure-model coefficients use the `cure:` prefix for the cure
+  probability linear predictor; `gamlss2` families use the `nu` parameter
+  block for the same logit-scale cure probability.
+- Standalone cure fitting is currently implemented for `backend = "c"`;
+  standard non-cure AFT fitting remains available through both C and Rust.
+- Cure fits use BFGS with a compiled likelihood/score evaluator and numerical
+  Hessians, unlike standard AFT fits, which use Newton-Raphson with analytic
+  observed information.
+- Cure log-likelihoods are evaluated on the time scale. Compare them with
+  standard AFT fits via `logLik(fit, jacobian = TRUE)`.
+- Cure likelihood changes should check `R/vldaft.R`, `R/family_aft.R`,
+  `src/vldaft_cure_eval.c`, prediction/methods, tests, and docs together.
+
 ## Build system
 
 - `src/Makevars` compiles the C objects and runs

@@ -1,0 +1,4 @@
+interface:
+  display_name: "vldaft Model Development"
+  short_description: "Turn model prompts into vldaft code"
+  default_prompt: "Use $vldaft-model-development to turn this model prompt into a validated vldaft implementation plan and patch."
