@@ -1,0 +1,4 @@
+interface:
+  display_name: "vldaft Development"
+  short_description: "Draft package maintenance workflow"
+  default_prompt: "Use $vldaft-development to implement and verify this vldaft package change."
