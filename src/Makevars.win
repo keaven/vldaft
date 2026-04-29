@@ -3,8 +3,9 @@ TARGET_DIR = ./rust/target
 LIBDIR     = $(TARGET_DIR)/$(TARGET)/release
 STATLIB    = $(LIBDIR)/libvldaft.a
 PKG_LIBS   = -L$(LIBDIR) -lvldaft -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll
+RUST_SOURCES = rust/Cargo.toml rust/Cargo.lock rust/src/lib.rs rust/src/model.rs rust/src/distributions.rs rust/src/matrix.rs rust/src/newton_raphson.rs
 
-C_SOURCES = init.c vldaft_fit.c dataio8.c loscreg8.c nrmod.c matrix.c
+C_SOURCES = init.c vldaft_fit.c vldaft_cure_eval.c dataio8.c loscreg8.c nrmod.c matrix.c
 OBJECTS   = $(C_SOURCES:.c=.o)
 
 all: $(SHLIB)
@@ -13,7 +14,7 @@ $(SHLIB): $(OBJECTS) $(STATLIB)
 
 CARGOTMP = $(CURDIR)/.cargo
 
-$(STATLIB):
+$(STATLIB): $(RUST_SOURCES)
 	mkdir -p $(LIBDIR)
 	if [ "$(NOT_CRAN)" != "true" ]; then \
 		export CARGO_HOME=$(CARGOTMP); \

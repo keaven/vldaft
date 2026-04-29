@@ -11,7 +11,7 @@ pub enum Distribution {
     Logistic,
     Normal,
     Cauchy,
-    Gamma { nu: f64, enu: f64 },
+    Gamma { _nu: f64, enu: f64 },
 }
 
 impl Distribution {
@@ -39,6 +39,7 @@ pub struct ModelState {
     pub npar: usize,
 
     pub tcol: usize,
+    pub t2col: i32,
     pub cencol: usize,
     pub startcol: i32,
     pub t0col: usize,
@@ -70,6 +71,7 @@ impl ModelState {
         ntheta: usize,
         mlo1_override: i32,
         time_col: usize,
+        time2_col: i32,
         event_col: usize,
         event_vals: &[i32],
         rgtcen_val: i32,
@@ -114,6 +116,7 @@ impl ModelState {
             ntheta,
             npar: nsc + nlo + ntheta,
             tcol: time_col,
+            t2col: time2_col,
             cencol: event_col,
             startcol: start_col,
             t0col: if t0_col >= 0 { t0_col as usize } else { 0 },
@@ -125,7 +128,7 @@ impl ModelState {
             xbar,
             madj: adjust,
             dist,
-            scratch: vec![0.0f64; spmlo + 4],
+            scratch: vec![0.0f64; spmlo + 5],
         }
     }
 
@@ -160,6 +163,7 @@ impl ModelState {
             if xp[self.cencol] as i32 == *ev { y[spml + 1] = 1.0; }
         }
         if xp[self.cencol] as i32 == self.rgtcen { y[spml + 1] = -1.0; }
+        if xp[self.cencol] as i32 == 2 { y[spml + 1] = 2.0; }
 
         if self.startcol >= 0 && xp[self.t0col] > 0.0 {
             y[spml + 2] = xp[self.startcol as usize];
@@ -167,6 +171,11 @@ impl ModelState {
         } else {
             y[spml + 2] = 0.0;
         }
+        y[spml + 4] = if self.t2col >= 0 && y[spml + 1] == 2.0 {
+            xp[self.t2col as usize].ln()
+        } else {
+            0.0
+        };
     }
 
     /// Compute log-likelihood, gradient, and packed Hessian at `beta`.
@@ -197,129 +206,161 @@ impl ModelState {
             self.fill_record(obs);
             let x = &self.scratch;
 
-            let mut mu = 0.0f64;
-            for i in spmlo1..spmlo { mu += beta[i] * x[i]; }
-            let mustar = mu;
+            let mut mustar = 0.0f64;
+            for i in spmlo1..spmlo { mustar += beta[i] * x[i]; }
+            let mut mu = mustar;
             for i in scale..spmlo1 { mu += beta[i] * x[i]; }
 
-            let event: i32 = if x[spmlo + 1] == 1.0 { 1 } else { 0 };
+            let event: i32 = x[spmlo + 1] as i32;
             let start: i32 = if x[spmlo + 2] == 1.0 { 1 } else { 0 };
 
-            // Build log(sigma) in u; then convert to sigma.
-            let mut u = 0.0f64;
-            for i in 0..scale { u += beta[i] * x[i]; }
+            let mut log_sigma = 0.0f64;
+            for i in 0..scale { log_sigma += beta[i] * x[i]; }
             let mut dpmu = 0.0f64;
             let mut ddpmu = 0.0f64;
-            let mut tem_power = 1.0f64;
-            if ntheta > 0 { dpmu = beta[spmlo]; u += dpmu * mustar; }
-            for i in 1..ntheta {
-                let tem2 = tem_power * ((i + 1) * i) as f64;
-                tem_power *= mustar;
-                dpmu  += beta[spmlo + i] * tem_power * (i + 1) as f64;
-                ddpmu += beta[spmlo + i] * tem2;
-                u     += tem_power * mustar * beta[spmlo + i];
-            }
-            if !(-39.0..=39.0).contains(&u) { return -1; }
-            let sigma = u.exp();
-            if event == 1 { *ll1 -= u; }
-
-            // Standardized residual(s).
-            let u_val = (x[spmlo] - mu) / sigma;
-            let mut f = [0.0f64; 3];
-            if self.dist.call(x[spmlo + 1] as i32, u_val, &mut f).is_err() {
-                return -1;
-            }
-            let uf2pf1 = u_val * f[2] + f[1];
-            let mut fdif = [f[0], f[1], f[2]];
-            let mut u0 = 0.0f64;
-            let mut u0f2pf1 = 0.0f64;
-            let mut f0 = [0.0f64; 3];
-            if start == 1 {
-                u0 = (x[spmlo + 3] - mu) / sigma;
-                if self.dist.call(0, u0, &mut f0).is_err() { return -1; }
-                for i in 0..3 { fdif[i] -= f0[i]; }
-                u0f2pf1 = u0 * f0[2] + f0[1];
-            }
-            *ll1 += fdif[0];
-
-            // Partials for gamma (scale) parameters.
-            j = 0;
-            let mut tem = f[1] * u_val - f0[1] * u0;
-            if event == 1 { tem += 1.0; }
-            let tem2_s = u_val * uf2pf1 - u0 * u0f2pf1;
-            for i in 0..scale {
-                db[i] -= tem * x[i];
-                let tem3 = x[i] * tem2_s;
-                for ii in 0..=i {
-                    ddb[j] -= x[ii] * tem3;
-                    j += 1;
+            if ntheta > 0 {
+                let mut pow_m = 1.0f64;
+                dpmu = beta[spmlo];
+                log_sigma += beta[spmlo] * mustar;
+                for i in 1..ntheta {
+                    let prev_pow = pow_m;
+                    pow_m *= mustar;
+                    dpmu += beta[spmlo + i] * (i + 1) as f64 * pow_m;
+                    ddpmu += beta[spmlo + i] * ((i + 1) * i) as f64 * prev_pow;
+                    log_sigma += beta[spmlo + i] * pow_m * mustar;
                 }
             }
+            if !(-39.0..=39.0).contains(&log_sigma) { return -1; }
+            let sigma = log_sigma.exp();
 
-            // Partials for etas not coupled into sigma.
-            let tem_a  = fdif[1] / sigma;
-            let tem2_a = (uf2pf1 - u0f2pf1) / sigma;
-            let tem3_a = fdif[2] / (sigma * sigma);
-            for i in scale..spmlo1 {
-                db[i] -= tem_a * x[i];
-                let tem4 = tem2_a * x[i];
-                for ii in 0..scale { ddb[j] -= x[ii] * tem4; j += 1; }
-                let tem4 = tem3_a * x[i];
-                for ii in scale..=i { ddb[j] -= tem4 * x[ii]; j += 1; }
-            }
-
-            // Partials for etas coupled into sigma via theta.
-            if spmlo > spmlo1 {
-                let odsput = 1.0 / sigma + dpmu * u_val;
-                let mut tem2 = f[2] / (sigma * sigma)
-                    + uf2pf1 * dpmu * (2.0 / sigma + u_val * dpmu)
-                    - (f[1] * u_val + event as f64) * ddpmu;
-                let mut tem3 = odsput * uf2pf1;
-                let mut tem  = odsput * f[1];
-                let mut odspu0t = 0.0f64;
-                if start == 1 {
-                    odspu0t = 1.0 / sigma + dpmu * u0;
-                    tem2 -= f0[2] / (sigma * sigma)
-                        + u0f2pf1 * dpmu * (2.0 / sigma + u0 * dpmu)
-                        - f0[1] * u0 * ddpmu;
-                    tem3 -= odspu0t * u0f2pf1;
-                    tem  -= odspu0t * f0[1];
+            let mut mu1 = vec![0.0f64; m];
+            let mut v1 = vec![0.0f64; m];
+            let mut v2 = vec![vec![0.0f64; m]; m];
+            for i in 0..scale { v1[i] = x[i]; }
+            for i in scale..spmlo {
+                mu1[i] = x[i];
+                if ntheta > 0 && i >= spmlo1 {
+                    v1[i] = dpmu * x[i];
                 }
-                tem += dpmu * event as f64;
+            }
+            for k in 0..ntheta {
+                v1[spmlo + k] = mustar.powi((k + 1) as i32);
+            }
+            if ntheta > 0 && spmlo > spmlo1 {
                 for i in spmlo1..spmlo {
-                    db[i] -= tem * x[i];
-                    let tem4 = tem3 * x[i];
-                    for ii in 0..scale { ddb[j] -= x[ii] * tem4; j += 1; }
-                    let tem4 = x[i] * (f[2] * odsput - f0[2] * odspu0t + fdif[1] * dpmu) / sigma;
-                    for ii in scale..spmlo1 { ddb[j] -= x[ii] * tem4; j += 1; }
-                    let tem4 = x[i] * tem2;
-                    for ii in spmlo1..=i { ddb[j] -= x[ii] * tem4; j += 1; }
+                    for k in spmlo1..spmlo {
+                        v2[i][k] = ddpmu * x[i] * x[k];
+                    }
                 }
+                for i in spmlo1..spmlo {
+                    let mut pow_m = 1.0f64;
+                    for k in 0..ntheta {
+                        let val = (k + 1) as f64 * pow_m * x[i];
+                        v2[i][spmlo + k] = val;
+                        v2[spmlo + k][i] = val;
+                        pow_m *= mustar;
+                    }
+                }
+            }
 
-                // Partials for theta.
-                let mut tem_ms = mustar;
-                let tem2_t = f[1] * u_val - f0[1] * u0;
-                let mut tem5 = -tem2_t - event as f64;
-                for i in 0..ntheta {
-                    db[spmlo + i] -= tem_ms * (tem2_t + event as f64);
-                    let tem3_t = tem_ms * uf2pf1;
-                    let tem03  = tem_ms * u0f2pf1;
-                    let mut tem4 = u_val * tem3_t - u0 * tem03;
-                    for ii in 0..scale { ddb[j] -= x[ii] * tem4; j += 1; }
-                    tem4 = (tem3_t - tem03) / sigma;
-                    for ii in scale..spmlo1 { ddb[j] -= x[ii] * tem4; j += 1; }
-                    tem4 = odsput * tem3_t - odspu0t * tem03 + tem5;
-                    for ii in spmlo1..spmlo { ddb[j] -= x[ii] * tem4; j += 1; }
-                    let mut tem3_theta = tem_ms * (uf2pf1 * u_val - u0f2pf1 * u0);
-                    for _ii in 0..=i {
-                        tem3_theta *= mustar;
-                        ddb[j] -= tem3_theta;
-                        j += 1;
+            let residual_partials = |uval: f64| -> (Vec<f64>, Vec<Vec<f64>>) {
+                let mut u1 = vec![0.0f64; m];
+                let mut u2 = vec![vec![0.0f64; m]; m];
+                for i in 0..m {
+                    u1[i] = -mu1[i] / sigma - uval * v1[i];
+                    for k in 0..m {
+                        u2[i][k] = (mu1[i] * v1[k] + mu1[k] * v1[i]) / sigma
+                            + uval * v1[i] * v1[k] - uval * v2[i][k];
                     }
-                    if i + 1 < ntheta {
-                        tem_ms *= mustar;
-                        tem5 *= mustar * (i + 2) as f64;
+                }
+                (u1, u2)
+            };
+
+            let u_val = (x[spmlo] - mu) / sigma;
+            let (u1, u2) = residual_partials(u_val);
+            let mut f = [0.0f64; 3];
+            let mut f_hi = [0.0f64; 3];
+            let mut f0 = [0.0f64; 3];
+            let q1: f64;
+            let q2: f64;
+            let q11: f64;
+            let q22: f64;
+            let q12: f64;
+            let explicit_v: f64;
+            let mut u_hi1 = vec![0.0f64; m];
+            let mut u_hi2 = vec![vec![0.0f64; m]; m];
+
+            if event == 2 {
+                if x[spmlo + 4] <= x[spmlo] { return -1; }
+                let u_hi = (x[spmlo + 4] - mu) / sigma;
+                let hi_partials = residual_partials(u_hi);
+                u_hi1 = hi_partials.0;
+                u_hi2 = hi_partials.1;
+                if self.dist.call(0, u_val, &mut f).is_err()
+                    || self.dist.call(0, u_hi, &mut f_hi).is_err() {
+                    return -1;
+                }
+                let ratio = (f_hi[0] - f[0]).exp();
+                if ratio >= 1.0 { return -1; }
+                *ll1 += f[0] + (1.0 - ratio).ln();
+                let a = f[0].exp();
+                let b = f_hi[0].exp();
+                let den = a - b;
+                if den <= 0.0 { return -1; }
+                q1 = a * f[1] / den;
+                q2 = -b * f_hi[1] / den;
+                q11 = a * (f[2] + f[1] * f[1]) / den - q1 * q1;
+                q22 = -b * (f_hi[2] + f_hi[1] * f_hi[1]) / den - q2 * q2;
+                q12 = a * f[1] * b * f_hi[1] / (den * den);
+                explicit_v = 0.0;
+            } else {
+                if self.dist.call(event, u_val, &mut f).is_err() {
+                    return -1;
+                }
+                explicit_v = if event == 1 { -1.0 } else { 0.0 };
+                *ll1 += f[0] + explicit_v * log_sigma;
+                q1 = f[1];
+                q2 = 0.0;
+                q11 = f[2];
+                q22 = 0.0;
+                q12 = 0.0;
+            }
+
+            let mut u_start1 = vec![0.0f64; m];
+            let mut u_start2 = vec![vec![0.0f64; m]; m];
+            if start == 1 {
+                let u0 = (x[spmlo + 3] - mu) / sigma;
+                let start_partials = residual_partials(u0);
+                u_start1 = start_partials.0;
+                u_start2 = start_partials.1;
+                if self.dist.call(0, u0, &mut f0).is_err() { return -1; }
+                *ll1 -= f0[0];
+            }
+
+            j = 0;
+            for i in 0..m {
+                let mut grad = q1 * u1[i] + explicit_v * v1[i];
+                if event == 2 {
+                    grad += q2 * u_hi1[i];
+                }
+                if start == 1 {
+                    grad -= f0[1] * u_start1[i];
+                }
+                db[i] += grad;
+
+                for k in 0..=i {
+                    let mut second = q11 * u1[i] * u1[k] + q1 * u2[i][k]
+                        + explicit_v * v2[i][k];
+                    if event == 2 {
+                        second += q22 * u_hi1[i] * u_hi1[k] + q2 * u_hi2[i][k]
+                            + q12 * (u1[i] * u_hi1[k] + u_hi1[i] * u1[k]);
                     }
+                    if start == 1 {
+                        second -= f0[2] * u_start1[i] * u_start1[k]
+                            + f0[1] * u_start2[i][k];
+                    }
+                    ddb[j] -= second;
+                    j += 1;
                 }
             }
         }

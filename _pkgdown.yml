@@ -2,6 +2,7 @@ url: https://keaven.github.io/vldaft/
 
 template:
   bootstrap: 5
+  math-rendering: katex
   bslib:
     primary: "#2b6cb0"
 
@@ -38,15 +39,20 @@ reference:
   desc: Family constructors for use inside the gamlss2 framework.
   contents:
   - starts_with("AFT_")
+  - starts_with("Cure_")
 
 articles:
 - title: Methodology
   navbar: ~
   contents:
   - anderson1991
+  - cure-mixture
 - title: Reference
   contents:
   - survival-explorer
+- title: Development
+  contents:
+  - agent-skills
 
 authors:
   Keaven Anderson:

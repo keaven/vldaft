@@ -16,6 +16,7 @@ extern double nu, enu;
  * All arguments come from R as SEXPs:
  *   s_data        numeric matrix (n x p), column-major
  *   s_time_col    integer, 0-based index of the time column
+ *   s_time2_col   integer, 0-based index of interval upper-time column
  *   s_event_col   integer, 0-based index of the event-indicator column
  *   s_event_vals  integer vector of values meaning "event"
  *   s_rgtcen_val  integer value meaning "right-censored" (-1 if none)
@@ -37,7 +38,7 @@ extern double nu, enu;
  * Returns a named list with:
  *   coefficients, vcov, loglik, loglik_init, score, iter, npar, nobs
  */
-SEXP vldaft_fit(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
+SEXP vldaft_fit(SEXP s_data, SEXP s_time_col, SEXP s_time2_col, SEXP s_event_col,
                 SEXP s_event_vals, SEXP s_rgtcen_val,
                 SEXP s_start_col, SEXP s_t0_col,
                 SEXP s_loc_cols, SEXP s_scale_cols,
@@ -94,7 +95,7 @@ SEXP vldaft_fit(SEXP s_data, SEXP s_time_col, SEXP s_event_col,
     scale_cols = INTEGER(s_scale_cols);
 
     setupls(ncol, (long)nobs, nlo, nsc, nth,
-            INTEGER(s_time_col)[0], INTEGER(s_event_col)[0],
+            INTEGER(s_time_col)[0], INTEGER(s_time2_col)[0], INTEGER(s_event_col)[0],
             loc_cols, scale_cols,
             nreoff, reoff,
             INTEGER(s_start_col)[0], INTEGER(s_t0_col)[0]);

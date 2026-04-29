@@ -1,3 +1,23 @@
+# vldaft (development version)
+
+## Features
+
+* Added generic Poisson-mixture cure-model wrappers for the `gamlss2`
+  family layer: `Cure_Weibull()`, `Cure_Logistic()`, `Cure_Normal()`,
+  `Cure_Cauchy()`, `Cure_Gamma()`, and `Cure_Exponential()`.
+* Added a cure-model vignette (`vignettes/cure-mixture.Rmd`) describing
+  the likelihood, first/second partials, simulation setup, and the new
+  family constructors.
+
+## Internal changes
+
+* Refactored `R/family_aft.R` so the baseline AFT density/survival/score
+  helpers can be reused by both the plain AFT families and the new
+  cure-model wrappers.
+* Added self-contained simulation helpers and test coverage for the
+  cure-family likelihood, scores, left-truncation handling, and
+  intercept-only parameter recovery.
+
 # vldaft 0.1.0
 
 First public release.

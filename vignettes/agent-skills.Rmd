@@ -1,0 +1,125 @@
+---
+title: "Using Repository Skills"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Using Repository Skills}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## Purpose
+
+This vignette is for maintainers who use coding assistants in the `vldaft`
+repository. Repository skills keep task-specific working rules close to the
+codebase, so a prompt can name a skill instead of restating the package model,
+build system, validation expectations, and documentation conventions every
+time.
+
+The short rule is:
+
+1. Read `inst/site/llms.txt` for the durable package guide.
+2. Choose the repo-local skill that matches the task.
+3. Inspect the relevant package files before editing.
+4. Validate the narrow surface that changed.
+
+These skills are contributor workflow aids. They do not affect the installed R
+package or the runtime behavior of `vldaft()`.
+
+## Skill map
+
+| Skill | Use it for | Typical validation |
+|---|---|---|
+| `$vldaft-development` | R interface changes, C/Rust backend work, model implementation, backend parity, tests, and package checks. | `devtools::test()`, targeted `testthat`, `R CMD INSTALL .`, and C/Rust parity checks when compiled code changes. |
+| `$vldaft-docs-site` | Roxygen, Rd files, README updates, vignettes, pkgdown navigation, and rendered-site verification. | Render the edited vignette or article, run `devtools::document()` for roxygen changes, and check pkgdown output when navigation or site assets change. |
+
+When a task spans both skills, start with the one that owns the first edit.
+For example, a new exported argument usually starts as `$vldaft-development`
+and then switches to `$vldaft-docs-site` once the behavior and tests are
+settled.
+
+## Example prompts
+
+Use a skill name at the front of the request when you want the assistant to
+load that workflow before acting.
+
+```text
+Use $vldaft-development to add a theta_vars regression test that checks the
+C and Rust back ends agree on a simulated right-censored Weibull dataset.
+```
+
+```text
+Use $vldaft-docs-site to add a vignette section explaining the log-likelihood
+Jacobian adjustment and render the updated article locally.
+```
+
+```text
+Use $vldaft-development, then $vldaft-docs-site, to add a new prediction type
+for cure probability quantiles, test it, document it, and update the README
+example.
+```
+
+## Worked documentation task
+
+A documentation task should be intentionally narrow. For a request like
+"add a vignette demonstrating skill usage", the assistant should:
+
+1. Read `inst/site/llms.txt`.
+2. Inspect the existing files in `vignettes/` and `_pkgdown.yml`.
+3. Add the vignette with standard R vignette metadata.
+4. Add the article slug to `_pkgdown.yml` if it should appear on the site.
+5. Render the new vignette, preferably to a temporary output directory.
+6. Review the diff and leave unrelated worktree changes untouched.
+
+The validation command can stay focused on the new article:
+
+```r
+rmarkdown::render(
+  "vignettes/agent-skills.Rmd",
+  output_dir = tempdir(),
+  quiet = TRUE
+)
+```
+
+For roxygen or reference-site changes, broaden validation to include
+documentation generation or a pkgdown article build.
+
+## Worked implementation task
+
+Implementation changes have a wider blast radius because `vldaft` has both C
+and Rust computational back ends. A backend task should use the development
+skill and explicitly check whether an algorithmic change must be mirrored.
+
+For example, a request to change theta-polynomial handling should guide the
+assistant to:
+
+1. Read the R boundary in `R/vldaft.R`.
+2. Inspect the C partials engine in `src/loscreg8.c`.
+3. Inspect the Rust counterpart in `src/rust/src/model.rs`.
+4. Update registration or wrappers if the call contract changes.
+5. Add or adjust tests under `tests/testthat/`.
+6. Run targeted parity tests before broader package checks.
+
+That mirrors the core contract in `inst/site/llms.txt`: R interface semantics,
+C entry points, Rust wrappers, and registration must move together when the
+backend contract changes.
+
+## Prompt template
+
+For routine work, this template is usually enough:
+
+```text
+Use $SKILL_NAME to <make the specific change>. Read inst/site/llms.txt first,
+preserve unrelated worktree changes, and run the narrow validation that matches
+the edited files.
+```
+
+Replace `$SKILL_NAME` with the relevant repo-local skill. Add any constraints
+that matter for the task, such as "do not rebuild pkgdown" or "compare C and
+Rust output on the existing simulated dataset."

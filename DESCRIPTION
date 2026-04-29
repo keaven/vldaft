@@ -9,23 +9,30 @@ Description: Fits the Anderson (1991) accelerated failure time regression
     model where both location and scale are functions of covariates, and
     scale can depend on location via a polynomial in the linear predictor.
     Supports Weibull, logistic, normal, Cauchy, and gamma error
-    distributions with right censoring, left censoring, and left
-    truncation. Provides a stand-alone fitting function and gamlss2
-    family extensions. Estimation is Newton-Raphson with a modified
-    Cholesky decomposition, implemented in both C and Rust.
+    distributions with right censoring, left censoring, interval
+    censoring, and left truncation. Provides a stand-alone fitting
+    function, 'gamlss2'
+    family extensions, and Poisson-mixture cure-model wrappers around
+    the AFT baselines. Standard AFT estimation, including interval-censored
+    responses, uses Newton-Raphson with a modified Cholesky decomposition,
+    implemented in both C and Rust; cure fits use BFGS with numerical
+    Hessians.
 License: GPL (>= 3)
 URL: https://keaven.github.io/vldaft/, https://github.com/keaven/vldaft
 BugReports: https://github.com/keaven/vldaft/issues
 NeedsCompilation: yes
 SystemRequirements: Cargo (>= 1.70.0) and rustc, the Rust compiler
-    (install from https://rustup.rs). Confidential example data
-    live in the companion repository https://github.com/keaven/vldaft.data.
-Depends: R (>= 3.5.0)
+    (install from https://rustup.rs). Source installs may need network
+    access for Rust crate downloads unless Cargo dependencies are already
+    cached.
+Depends: R (>= 4.1.0)
 Imports: survival, stats
-Suggests: gamlss2, knitr, litedown, rmarkdown, testthat (>= 3.0.0)
+Suggests: gamlss2, gglite, knitr, litedown, rmarkdown,
+    testthat (>= 3.0.0)
 VignetteBuilder: knitr, litedown
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
-Additional_repositories: https://gamlss-dev.r-universe.dev
+Additional_repositories: https://gamlss-dev.r-universe.dev,
+    https://yihui.r-universe.dev
 Config/testthat/edition: 3

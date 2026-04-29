@@ -1,0 +1,476 @@
+---
+title: "Poisson-Mixture Cure Families for vldaft"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Poisson-Mixture Cure Families for vldaft}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+library(vldaft)
+library(gglite)
+has_gamlss2 <- requireNamespace("gamlss2", quietly = TRUE)
+```
+
+## Motivation
+
+The baseline `vldaft` model is already useful for prediction because it
+directly models subject-specific survival curves. What it cannot represent
+is a **survival plateau**: long-run survival that levels off above zero.
+
+For indications with a plausible cure fraction, the package now provides
+`gamlss2` family constructors that wrap the existing accelerated failure
+time baselines in a **Poisson-mixture cure model**. The idea is to keep the
+baseline AFT machinery exactly as before, but replace the survival function
+\(S_0(t)\) with
+
+\[
+S(t) = \exp\{-\tau (1 - S_0(t))\},
+\qquad
+\tau = -\log(p),
+\qquad
+p = \operatorname{logit}^{-1}(\nu).
+\]
+
+Here \(p\) is the cure probability and \(\nu\) is modeled with a standard
+logit link.
+
+## Available family constructors
+
+The current implementation keeps the **architecture generic** over the
+supported baseline survival distributions:
+
+- `Cure_Weibull(theta = 0L)`
+- `Cure_Logistic(theta = 0L)`
+- `Cure_Normal(theta = 0L)`
+- `Cure_Cauchy(theta = 0L)`
+- `Cure_Gamma(theta = 0L, base_nu = 1)`
+- `Cure_Exponential()`
+
+For the cure families, the parameter blocks are:
+
+- `mu`: location / linear predictor for the baseline AFT model
+- `sigma`: log-scale parameter (except for `Cure_Exponential()`, where
+  \(\sigma \equiv 1\))
+- `nu`: cure probability on the response scale, with a logit link
+- `theta1`, `theta2`, ...: optional VLDAFT coupling terms linking
+  `log(sigma)` to `mu`
+
+So a `gamlss2` call for a one-theta cure Weibull model uses the formula
+layout `mu | sigma | nu | theta1`.
+
+```{r gamlss2-cure-example, eval = FALSE}
+library(gamlss2)
+library(survival)
+
+fit <- gamlss2(
+  Surv(time, status) ~ x1 + x2 | 1 | x1 + x2 | 1,
+  data = my_data,
+  family = Cure_Weibull(theta = 1)
+)
+```
+
+## Likelihood
+
+Let \(F_0(t) = 1 - S_0(t)\) denote the baseline CDF, and let
+
+\[
+w_i = \frac{\log t_i - \mu_i}{\sigma_{i,\mathrm{eff}}}
+\]
+
+be the standardized AFT residual, with the same `theta`-polynomial
+coupling used by the non-cure families:
+
+\[
+\log(\sigma_{i,\mathrm{eff}})
+= \log(\sigma_i) + \sum_{k=1}^{K} \theta_k (\mu_i - \bar{\mu})^k.
+\]
+
+For an observed event, the cure-model density is
+
+\[
+f(t_i) = \tau_i f_0(t_i) \exp\{-\tau_i F_0(t_i)\},
+\]
+
+so the log-likelihood contribution is
+
+\[
+\ell_i^{(\mathrm{event})}
+= \log(\tau_i) + \log f_0(t_i) - \tau_i F_0(t_i).
+\]
+
+For a right-censored observation,
+
+\[
+\ell_i^{(\mathrm{cens})} = -\tau_i F_0(t_i).
+\]
+
+For a left-censored observation known only to satisfy \(T_i \le a_i\),
+
+\[
+\ell_i^{(\mathrm{left})}
+= \log\left(1 - \exp\{-\tau_i F_0(a_i)\}\right).
+\]
+
+For an interval-censored observation \(a_i < T_i \le b_i\),
+
+\[
+\ell_i^{(\mathrm{int})}
+= \log\left[
+    \exp\{-\tau_i F_0(a_i)\}
+    - \exp\{-\tau_i F_0(b_i)\}
+  \right].
+\]
+
+The ordinary non-cure AFT model uses the same censoring structure with
+\(S_0(t)\) in place of \(\exp\{-\tau_i F_0(t)\}\). Thus, for an
+interval-censored non-cure observation,
+
+\[
+\ell_i^{(\mathrm{int},0)}
+= \log\left\{S_0(a_i) - S_0(b_i)\right\}.
+\]
+
+For left truncation at \(t_{0i}\), we condition on survival to entry and
+add
+
+\[
+\tau_i F_0(t_{0i})
+\]
+
+to the contribution above.
+
+## First partials
+
+Let \(\alpha\) be any baseline parameter block (`mu`, `sigma`, `theta1`,
+...). Because
+
+\[
+\frac{\partial F_0}{\partial \alpha}
+  = -S_0 \frac{\partial \log S_0}{\partial \alpha},
+\]
+
+the cure-model score takes a simple form:
+
+\[
+\frac{\partial \ell_i}{\partial \alpha}
+= I(\delta_i = 1)\frac{\partial \log f_0(t_i)}{\partial \alpha}
+  + \tau_i S_0(t_i)\frac{\partial \log S_0(t_i)}{\partial \alpha},
+\]
+
+with the left-truncation correction
+
+\[
+-\tau_i S_0(t_{0i})
+\frac{\partial \log S_0(t_{0i})}{\partial \alpha}.
+\]
+
+For the cure block itself, the implementation uses \(\nu\) as the additive
+predictor with a logit link, so \(p = \operatorname{logit}^{-1}(\nu)\) and
+
+\[
+\frac{\partial \tau}{\partial \nu} = -(1 - p).
+\]
+
+Therefore
+
+\[
+\frac{\partial \ell_i^{(\mathrm{event})}}{\partial \nu}
+= (1-p_i)\left(F_0(t_i) - \frac{1}{\tau_i}\right),
+\qquad
+\frac{\partial \ell_i^{(\mathrm{cens})}}{\partial \nu}
+= (1-p_i)F_0(t_i),
+\]
+
+with a left-truncation subtraction of \((1-p_i)F_0(t_{0i})\).
+
+For interval censoring it is useful to write
+
+\[
+C_i(t) = \exp\{-\tau_i F_0(t)\}.
+\]
+
+The baseline-parameter score for \(a_i < T_i \le b_i\) is then
+
+\[
+\frac{\partial \ell_i^{(\mathrm{int})}}{\partial \alpha}
+=
+\frac{
+  C_i(a_i)\tau_i S_0(a_i)
+    \frac{\partial \log S_0(a_i)}{\partial \alpha}
+  -
+  C_i(b_i)\tau_i S_0(b_i)
+    \frac{\partial \log S_0(b_i)}{\partial \alpha}
+}{
+  C_i(a_i) - C_i(b_i)
+}.
+\]
+
+For the cure block,
+
+\[
+\frac{\partial \ell_i^{(\mathrm{int})}}{\partial \nu}
+=
+\frac{
+  C_i(a_i)(1-p_i)F_0(a_i)
+  -
+  C_i(b_i)(1-p_i)F_0(b_i)
+}{
+  C_i(a_i) - C_i(b_i)
+}.
+\]
+
+## Second partials
+
+The full Hessian is algebraically messy but follows directly from the score
+expressions above. For the one-dimensional cure block, differentiating once
+more gives
+
+\[
+\frac{\partial^2 \ell_i^{(\mathrm{event})}}{\partial \nu^2}
+= -p_i(1-p_i)\left(F_0(t_i) - \frac{1}{\tau_i}\right)
+   \frac{-(1-p_i)^2}{\tau_i^2},
+\]
+
+and for a censored observation,
+
+\[
+\frac{\partial^2 \ell_i^{(\mathrm{cens})}}{\partial \nu^2}
+= -p_i(1-p_i)F_0(t_i),
+\]
+
+again with the obvious left-truncation correction. The standard non-cure
+`vldaft()` C and Rust back ends use analytic observed-information updates,
+including the interval-censored contribution
+\(\log\{S_0(a_i) - S_0(b_i)\}\). The standalone cure optimizer uses the
+compiled analytic score together with `optimHess()` for the covariance
+matrix.
+
+## A small simulation
+
+The code below simulates from an intercept-only cure exponential model and
+then shows the matching family constructor.
+
+```{r cure-sim}
+set.seed(21)
+n <- 300
+mu_true <- 1.3
+p_true <- 0.25
+tau <- -log(p_true)
+u <- runif(n)
+has_event <- u <= (1 - p_true)
+t_event <- rep(Inf, n)
+f0 <- -log1p(-u[has_event]) / tau
+t_event[has_event] <- exp(mu_true + log(-log(1 - f0)))
+c_time <- rexp(n, rate = 0.02)
+time <- pmin(t_event, c_time)
+status <- as.integer(t_event <= c_time)
+
+mean(status == 0)
+```
+
+## Demo: `gamlss2` and standalone `vldaft()`
+
+The cure families were built first at the `gamlss2` layer and then wired
+into a standalone C-backed `vldaft(cure = TRUE)` path. On the same simulated
+dataset, the two fits should achieve nearly the same objective value.
+
+`vldaft()` now reports the linear blocks (`mu`, `sigma`, and `cure`) back on
+the **raw covariate scale**, even when it internally centers covariates for
+stability. The original training means are stored on the fit object and
+reused inside `predict()`, so the printed coefficients stay easy to compare
+with `gamlss2` while prediction remains faithful to the internally centered
+fit.
+
+```{r cure-demo-data}
+set.seed(20260422)
+n_demo <- 250
+x1 <- rnorm(n_demo)
+x2 <- rbinom(n_demo, 1, 0.4)
+mu_demo <- 1.8 + 0.5 * x1 - 0.35 * x2
+sigma_demo <- exp(-0.25)
+nu_demo <- qlogis(0.22) - 0.35 * x1 + 0.55 * x2
+p_demo <- plogis(nu_demo)
+tau_demo <- -log(p_demo)
+u_demo <- runif(n_demo)
+has_event_demo <- u_demo <= (1 - p_demo)
+t_event_demo <- rep(Inf, n_demo)
+f0_demo <- -log1p(-u_demo[has_event_demo]) / tau_demo[has_event_demo]
+t_event_demo[has_event_demo] <- exp(mu_demo[has_event_demo] +
+  sigma_demo * log(-log(1 - f0_demo)))
+c_time_demo <- rexp(n_demo, rate = 0.03)
+
+demo_dat <- data.frame(
+  time = pmin(t_event_demo, c_time_demo),
+  status = as.integer(t_event_demo <= c_time_demo),
+  x1 = x1,
+  x2 = x2
+)
+
+mean(demo_dat$status == 0)
+```
+
+```{r cure-vldaft-fit}
+fit_vldaft <- vldaft(
+  survival::Surv(time, status) ~ x1 + x2 | 1 | x1 + x2,
+  data = demo_dat,
+  dist = "weibull",
+  cure = TRUE,
+  backend = "c"
+)
+
+coef(fit_vldaft)
+fit_vldaft$loglik
+```
+
+```{r cure-gamlss2-fit, eval = has_gamlss2}
+library(gamlss2)
+
+fit_gamlss2 <- gamlss2(
+  survival::Surv(time, status) ~ x1 + x2 | 1 | x1 + x2,
+  data = demo_dat,
+  family = Cure_Weibull(),
+  control = gamlss2_control(maxit = 100)
+)
+
+coef(fit_gamlss2)
+logLik(fit_gamlss2)
+```
+
+```{r cure-fit-compare, eval = has_gamlss2}
+compare <- data.frame(
+  term = c(
+    "loglik",
+    "scale_intercept",
+    "mu_intercept",
+    "mu_x1",
+    "mu_x2",
+    "cure_intercept",
+    "cure_x1",
+    "cure_x2"
+  ),
+  vldaft = c(
+    fit_vldaft$loglik,
+    unname(coef(fit_vldaft)["gamma:(Intercept)"]),
+    unname(coef(fit_vldaft)["eta:(Intercept)"]),
+    unname(coef(fit_vldaft)["eta:x1"]),
+    unname(coef(fit_vldaft)["eta:x2"]),
+    unname(coef(fit_vldaft)["cure:(Intercept)"]),
+    unname(coef(fit_vldaft)["cure:x1"]),
+    unname(coef(fit_vldaft)["cure:x2"])
+  ),
+  gamlss2 = c(
+    as.numeric(logLik(fit_gamlss2)),
+    unname(coef(fit_gamlss2)["sigma.p.(Intercept)"]),
+    unname(coef(fit_gamlss2)["mu.p.(Intercept)"]),
+    unname(coef(fit_gamlss2)["mu.p.x1"]),
+    unname(coef(fit_gamlss2)["mu.p.x2"]),
+    unname(coef(fit_gamlss2)["nu.p.(Intercept)"]),
+    unname(coef(fit_gamlss2)["nu.p.x1"]),
+    unname(coef(fit_gamlss2)["nu.p.x2"])
+  )
+)
+compare$abs_diff <- abs(compare$vldaft - compare$gamlss2)
+compare
+```
+
+```{r cure-fit-compare-predictions, eval = has_gamlss2}
+coef_g <- coef(fit_gamlss2)
+
+pred_compare <- data.frame(
+  metric = c(
+    "logLik difference",
+    "cor(mu linear predictor)",
+    "max abs diff mu",
+    "cor(cure probability)",
+    "max abs diff cure probability"
+  ),
+  value = c(
+    abs(fit_vldaft$loglik - as.numeric(logLik(fit_gamlss2))),
+    cor(
+      predict(fit_vldaft, newdata = demo_dat, type = "lp"),
+      coef_g[["mu.p.(Intercept)"]] +
+        coef_g[["mu.p.x1"]] * demo_dat$x1 +
+        coef_g[["mu.p.x2"]] * demo_dat$x2
+    ),
+    max(abs(
+      predict(fit_vldaft, newdata = demo_dat, type = "lp") -
+        (coef_g[["mu.p.(Intercept)"]] +
+           coef_g[["mu.p.x1"]] * demo_dat$x1 +
+           coef_g[["mu.p.x2"]] * demo_dat$x2)
+    )),
+    cor(
+      predict(fit_vldaft, newdata = demo_dat, type = "cure"),
+      plogis(
+        coef_g[["nu.p.(Intercept)"]] +
+          coef_g[["nu.p.x1"]] * demo_dat$x1 +
+          coef_g[["nu.p.x2"]] * demo_dat$x2
+      )
+    ),
+    max(abs(
+      predict(fit_vldaft, newdata = demo_dat, type = "cure") -
+        plogis(
+          coef_g[["nu.p.(Intercept)"]] +
+            coef_g[["nu.p.x1"]] * demo_dat$x1 +
+            coef_g[["nu.p.x2"]] * demo_dat$x2
+        )
+    ))
+  )
+)
+pred_compare
+```
+
+On this simulation, the two optimizers land at almost the same
+log-likelihood, and the implied linear predictors and cure probabilities are
+essentially identical. With `vldaft()` reporting coefficients back on the raw
+covariate scale, the intercepts are also directly comparable to the
+`gamlss2` coefficients.
+
+```{r cure-gamlss2-unavailable, eval = !has_gamlss2}
+cat("`gamlss2` is not installed, so only the standalone `vldaft()` cure fit",
+    "is shown in this render.\n")
+```
+
+```{r cure-exp-family}
+fam <- Cure_Exponential()
+par <- list(
+  mu = rep(mu_true, 3),
+  nu = rep(p_true, 3)
+)
+
+fam$cure_probability(par)
+fam$survival(c(1, 2, 5), par)
+```
+
+```{r cure-exp-plot}
+t_grid <- seq(0.1, 18, length.out = 200)
+plot_df <- data.frame(
+  time = t_grid,
+  survival = fam$survival(t_grid, list(mu = mu_true, nu = p_true))
+)
+
+g2(plot_df, survival ~ time, title = "Cure exponential survival curve") |>
+  mark_line() |>
+  scale_x(domain = c(0, 18), nice = FALSE) |>
+  scale_y(domain = c(0, 1), nice = FALSE) |>
+  axis_x(title = "Time", values = c(0, 6, 12, 18)) |>
+  axis_y(title = "Survival probability", values = c(0, 0.2, 0.4, 0.6, 0.8, 1))
+```
+
+## Notes
+
+- The cure-layer architecture is distribution-generic, but initial
+  validation focused on the Weibull / exponential cases.
+- In this first pass, `nu` is a **linear regression block only**. A future
+  extension could let `nu` depend on low-order powers of `mu`, mirroring the
+  VLDAFT coupling already used for `sigma`.
+- The Poisson-mixture cure model does **not** collapse to the plain baseline
+  family by simply sending \(p \to 0\); that common intuition is incorrect
+  for this construction, so tests in this package focus on score
+  consistency, left-truncation handling, and parameter recovery instead.

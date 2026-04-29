@@ -15,6 +15,7 @@ use model::{Distribution, ModelState};
 fn vldaft_fit_rust(
     data: RMatrix<f64>,
     time_col: i32,
+    time2_col: i32,
     event_col: i32,
     event_vals: Integers,
     rgtcen_val: i32,
@@ -41,7 +42,7 @@ fn vldaft_fit_rust(
         2 => Distribution::Logistic,
         3 => Distribution::Normal,
         4 => Distribution::Cauchy,
-        5 => Distribution::Gamma { nu, enu: nu.exp() },
+        5 => Distribution::Gamma { _nu: nu, enu: nu.exp() },
         _ => panic!("Unknown distribution: {}", dist),
     };
 
@@ -53,7 +54,7 @@ fn vldaft_fit_rust(
         rdata, nobs, ncol,
         &loc_c, &scale_c,
         ntheta as usize, mlo1,
-        time_col as usize, event_col as usize,
+        time_col as usize, time2_col, event_col as usize,
         &ev_vals, rgtcen_val,
         start_col, t0_col,
         distribution,
