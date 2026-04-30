@@ -1,6 +1,6 @@
 Package: vldaft
 Title: Non-Proportional Hazards Accelerated Failure Time Regression
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: c(
     person("Keaven", "Anderson", , "keaven_anderson@merck.com",
            role = c("aut", "cre", "cph"))

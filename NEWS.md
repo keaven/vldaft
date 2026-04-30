@@ -1,4 +1,4 @@
-# vldaft (development version)
+# vldaft 0.2.0
 
 ## Features
 
@@ -8,6 +8,13 @@
 * Added a cure-model vignette (`vignettes/cure-mixture.Rmd`) describing
   the likelihood, first/second partials, simulation setup, and the new
   family constructors.
+* Added a motivational vignette (`vignettes/weibull-motivation.Rmd`)
+  with interactive `gglite` visualizations showing how location, scale,
+  the VLDAFT coupling parameter, and cure rate shape Weibull survival
+  and hazard functions.
+* Added a companion slide deck (`slides/vldaft-weibull-demo.qmd`) for
+  presenting the Weibull AFT and cure-model methodology to a statistical
+  audience.
 
 ## Internal changes
 
