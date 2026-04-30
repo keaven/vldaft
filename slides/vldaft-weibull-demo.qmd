@@ -1,0 +1,433 @@
+---
+title: "Weibull AFT and Cure Models with vldaft"
+subtitle: "Location, scale, shape, and cure-rate effects on survival"
+author: "Keaven Anderson"
+date: today
+format:
+  revealjs:
+    theme: simple
+    slide-number: c/t
+    show-slide-number: all
+    chalkboard: false
+    incremental: false
+    smaller: true
+    width: 1280
+    height: 900
+    fig-width: 8
+    fig-height: 4.5
+    fig-align: center
+    code-line-numbers: false
+    auto-stretch: false
+    center: false
+    embed-resources: true
+    css: custom.css
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup, include = FALSE}
+library(gglite)
+```
+
+## Outline
+
+1. The Weibull AFT model and its parameterization
+2. How **location** ($\mu$) shifts the survival curve
+3. How **scale** ($\sigma$) reshapes the survival curve
+4. The VLDAFT extension: letting $\sigma$ depend on $\mu$
+5. Anderson (1991): Framingham Heart Study application
+6. Cure models: adding a survival plateau
+7. Cure rate + shape interaction
+
+---
+
+## The Weibull AFT parameterization
+
+For event time $T$:
+
+$$
+\log T = \mu + \sigma\,\varepsilon, \qquad \varepsilon \sim \text{Gumbel}
+$$
+
+The survival function is:
+
+$$
+S(t) = \exp\!\left\{-\exp\!\left(\frac{\log t - \mu}{\sigma}\right)\right\}
+$$
+
+- $\mu$ = **location** on the log-time scale (shifts the curve left/right)
+- $\sigma$ = **scale** (controls the spread / shape of the hazard)
+- Shape parameter $\alpha = 1/\sigma$: when $\alpha > 1$, hazard increases over time
+
+---
+
+## Effect of location ($\mu$): shifting the survival curve
+
+Holding $\sigma = 0.8$ fixed, vary $\mu$ from 0.5 to 3.0.
+
+```{r location-effect}
+#| code-fold: true
+weibull_S <- function(t, mu, sigma) {
+  exp(-exp((log(t) - mu) / sigma))
+}
+
+t_grid <- seq(0.01, 30, length.out = 300)
+mu_vals <- c(0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
+sigma_fixed <- 0.8
+
+df <- do.call(rbind, lapply(mu_vals, function(mu) {
+  data.frame(time = t_grid,
+             survival = weibull_S(t_grid, mu, sigma_fixed),
+             mu = paste0("mu = ", mu))
+}))
+
+g2(df, survival ~ time, color = "mu",
+   title = "Weibull survival: varying location (sigma = 0.8)") |>
+  mark_line() |>
+  scale_x(domain = c(0, 30), nice = FALSE) |>
+  scale_y(domain = c(0, 1), nice = FALSE) |>
+  axis_x(title = "Time") |>
+  axis_y(title = "S(t)")
+```
+
+Larger $\mu$ = longer expected survival time. The curves shift right.
+
+---
+
+## Location effect on the hazard function
+
+```{r location-hazard}
+#| code-fold: true
+weibull_h <- function(t, mu, sigma) {
+  alpha <- 1 / sigma
+  lambda <- exp(-mu / sigma)
+  alpha * lambda * t^(alpha - 1)
+}
+
+df_h <- do.call(rbind, lapply(c(1.0, 2.0, 3.0), function(mu) {
+  data.frame(time = t_grid,
+             hazard = weibull_h(t_grid, mu, sigma_fixed),
+             mu = paste0("mu = ", mu))
+}))
+
+g2(df_h, hazard ~ time, color = "mu",
+   title = "Weibull hazard: varying location (sigma = 0.8)") |>
+  mark_line() |>
+  scale_x(domain = c(0, 30), nice = FALSE) |>
+  axis_x(title = "Time") |>
+  axis_y(title = "h(t)")
+```
+
+The hazard curves shift right and downward with increasing $\mu$.
+Under constant $\sigma$, the **hazard ratio is constant** — proportional hazards.
+
+---
+
+## Effect of scale ($\sigma$): reshaping the curve
+
+Holding $\mu = 2.0$ fixed, vary $\sigma$ from 0.3 to 1.5.
+
+```{r scale-effect}
+#| code-fold: true
+sigma_vals <- c(0.3, 0.5, 0.8, 1.0, 1.5)
+
+df_s <- do.call(rbind, lapply(sigma_vals, function(s) {
+  data.frame(time = t_grid,
+             survival = weibull_S(t_grid, 2.0, s),
+             sigma = paste0("sigma = ", s))
+}))
+
+g2(df_s, survival ~ time, color = "sigma",
+   title = "Weibull survival: varying scale (mu = 2.0)") |>
+  mark_line() |>
+  scale_x(domain = c(0, 30), nice = FALSE) |>
+  scale_y(domain = c(0, 1), nice = FALSE) |>
+  axis_x(title = "Time") |>
+  axis_y(title = "S(t)")
+```
+
+- Small $\sigma$ (large $\alpha = 1/\sigma$): steep drop, concentrated risk
+- Large $\sigma$: gradual decline, drawn-out tail
+
+---
+
+## Scale effect on the hazard
+
+```{r scale-hazard}
+#| code-fold: true
+df_sh <- do.call(rbind, lapply(c(0.5, 0.8, 1.0, 1.5), function(s) {
+  h <- weibull_h(t_grid, 2.0, s)
+  h[h > 2] <- NA  # cap for display
+  data.frame(time = t_grid, hazard = h,
+             sigma = paste0("sigma = ", s))
+}))
+df_sh <- df_sh[!is.na(df_sh$hazard), ]
+
+g2(df_sh, hazard ~ time, color = "sigma",
+   title = "Weibull hazard: varying scale (mu = 2.0)") |>
+  mark_line() |>
+  scale_x(domain = c(0, 30), nice = FALSE) |>
+  axis_x(title = "Time") |>
+  axis_y(title = "h(t)")
+```
+
+- $\sigma < 1$ ($\alpha > 1$): **increasing** hazard — aging / wear-out
+- $\sigma = 1$ ($\alpha = 1$): **constant** hazard — exponential
+- $\sigma > 1$ ($\alpha < 1$): **decreasing** hazard — early risk
+
+---
+
+## Combining location and scale
+
+```{r location-scale-combined}
+#| code-fold: true
+combos <- list(
+  list(mu = 1.0, sigma = 0.5, label = "mu=1.0, sigma=0.5 (high risk, steep)"),
+  list(mu = 2.0, sigma = 0.5, label = "mu=2.0, sigma=0.5 (low risk, steep)"),
+  list(mu = 1.0, sigma = 1.2, label = "mu=1.0, sigma=1.2 (high risk, gradual)"),
+  list(mu = 2.0, sigma = 1.2, label = "mu=2.0, sigma=1.2 (low risk, gradual)")
+)
+
+df_c <- do.call(rbind, lapply(combos, function(p) {
+  data.frame(time = t_grid,
+             survival = weibull_S(t_grid, p$mu, p$sigma),
+             profile = p$label)
+}))
+
+g2(df_c, survival ~ time, color = "profile",
+   title = "Weibull survival: four location-scale combinations") |>
+  mark_line() |>
+  scale_x(domain = c(0, 30), nice = FALSE) |>
+  scale_y(domain = c(0, 1), nice = FALSE) |>
+  axis_x(title = "Time") |>
+  axis_y(title = "S(t)")
+```
+
+Location shifts the curve; scale controls how abruptly risk accumulates.
+
+---
+
+## Why constant $\sigma$ is restrictive
+
+Under the standard Weibull AFT with constant $\sigma$:
+
+$$
+\frac{h_A(t)}{h_B(t)} = \text{constant for all } t
+$$
+
+This is **proportional hazards**. In practice, hazard ratios often:
+
+- Converge toward 1 over time (treatment effect wanes)
+- Diverge (delayed treatment effect)
+- Cross (early harm, late benefit)
+
+A single extra parameter can capture these patterns.
+
+---
+
+## The VLDAFT extension (Anderson, 1991)
+
+Let $\sigma$ vary with the fitted location:
+
+$$
+\log \sigma_i = \gamma_0 + \theta_1 (\mu_i - \bar\mu)
+$$
+
+- $\theta_1 = 0$: standard AFT (proportional hazards under Weibull)
+- $\theta_1 < 0$: subjects with longer expected survival have **tighter** dispersion → **converging hazards**
+- $\theta_1 > 0$: **diverging hazards**
+
+One scalar parameter breaks proportional hazards.
+
+---
+
+## Visualising the $\theta_1$ effect
+
+```{r theta-effect}
+#| code-fold: true
+mu_low <- 1.5; mu_high <- 2.5; mubar <- 2.0; gamma0 <- log(0.6)
+theta_vals <- c(0, -0.3, -0.6, 0.3)
+
+df_theta <- do.call(rbind, lapply(theta_vals, function(th) {
+  sig_low  <- exp(gamma0 + th * (mu_low  - mubar))
+  sig_high <- exp(gamma0 + th * (mu_high - mubar))
+  rbind(
+    data.frame(time = t_grid,
+               survival = weibull_S(t_grid, mu_low, sig_low),
+               group = "high risk (mu=1.5)",
+               theta = paste0("theta1 = ", th)),
+    data.frame(time = t_grid,
+               survival = weibull_S(t_grid, mu_high, sig_high),
+               group = "low risk (mu=2.5)",
+               theta = paste0("theta1 = ", th))
+  )
+}))
+
+g2(df_theta[df_theta$theta == "theta1 = 0", ],
+   survival ~ time, color = "group",
+   title = "theta1 = 0: proportional hazards") |>
+  mark_line() |>
+  scale_x(domain = c(0, 30), nice = FALSE) |>
+  scale_y(domain = c(0, 1), nice = FALSE) |>
+  axis_x(title = "Time") |>
+  axis_y(title = "S(t)")
+```
+
+---
+
+## Converging hazards: $\theta_1 = -0.3$
+
+```{r theta-neg}
+#| code-fold: true
+g2(df_theta[df_theta$theta == "theta1 = -0.3", ],
+   survival ~ time, color = "group",
+   title = "theta1 = -0.3: converging hazards") |>
+  mark_line() |>
+  scale_x(domain = c(0, 30), nice = FALSE) |>
+  scale_y(domain = c(0, 1), nice = FALSE) |>
+  axis_x(title = "Time") |>
+  axis_y(title = "S(t)")
+```
+
+The low-risk and high-risk curves are closer together at late times.
+Hazards converge — the risk-factor effect **wanes** over time.
+
+---
+
+## Anderson (1991): Framingham Heart Study
+
+- 1,433 men aged 30–49, followed ~32 years for CHD incidence
+- Covariates: log(age), log(SBP), log(cholesterol), relative weight, smoking
+- Standard Weibull AFT (Model 1) vs VLDAFT with $\theta_1$ (Model 2)
+
+**Key finding:** $\hat\theta_1 = -0.95$ (highly significant, LRT $\chi^2_1 = 20.9$, $p < 0.001$)
+
+Interpretation: the dispersion **increases** with predicted survival time,
+meaning risk-factor effects on the hazard **converge** over the 32-year follow-up.
+
+The standard proportional hazards model was rejected in favor of converging hazards.
+
+---
+
+## Anderson (1991): model comparison
+
+| Model | Description | Parameters | Log-likelihood |
+|-------|-------------|:----------:|:--------------:|
+| 1 | Standard Weibull AFT | 7 | −4414.5 |
+| 2 | VLDAFT ($\theta_1$) | 8 | −4404.0 |
+| 3a | VLDAFT ($\theta_1, \theta_2$) | 9 | −4403.9 |
+| 3b | Full scale regression | 12 | −4404.0 |
+
+- Model 2 strongly beats Model 1 (LRT = 20.9, 1 df)
+- Models 3a and 3b offer no improvement over Model 2
+- **One parameter ($\theta_1$) captures the entire nonproportional hazards effect**
+
+---
+
+## Adding a cure fraction
+
+Some diseases have long-term survivors who will never experience the event.
+The **Poisson-mixture cure model** adds a plateau:
+
+$$
+S(t) = \exp\{-\tau(1 - S_0(t))\}, \qquad \tau = -\log(p)
+$$
+
+where $p$ is the cure probability and $S_0(t)$ is the baseline Weibull survival.
+
+As $t \to \infty$: $S(t) \to \exp(-\tau) = p$.
+
+---
+
+## Cure rate effect on survival
+
+Fix $\mu = 2.0$, $\sigma = 0.8$, vary cure rate $p$.
+
+```{r cure-rate-effect}
+#| code-fold: true
+cure_S <- function(t, mu, sigma, p) {
+  S0 <- weibull_S(t, mu, sigma)
+  tau <- -log(p)
+  exp(-tau * (1 - S0))
+}
+
+cure_rates <- c(0, 0.1, 0.3, 0.5)
+df_cure <- do.call(rbind, lapply(cure_rates, function(p) {
+  S <- if (p == 0) weibull_S(t_grid, 2.0, 0.8)
+       else cure_S(t_grid, 2.0, 0.8, p)
+  data.frame(time = t_grid, survival = S,
+             cure = paste0("p = ", sprintf("%.0f%%", p * 100)))
+}))
+
+g2(df_cure, survival ~ time, color = "cure",
+   title = "Effect of cure rate on Weibull survival (mu=2, sigma=0.8)") |>
+  mark_line() |>
+  scale_x(domain = c(0, 30), nice = FALSE) |>
+  scale_y(domain = c(0, 1), nice = FALSE) |>
+  axis_x(title = "Time") |>
+  axis_y(title = "S(t)")
+```
+
+The plateau at $S(\infty) = p$ is clearly visible for $p > 0$.
+
+---
+
+## Cure model: shape parameter effect
+
+Fix $\mu = \log(2) \approx 0.69$ (median ~2 years for uncured), cure rate $p = 0.3$. Vary $\sigma$.
+
+```{r cure-shape}
+#| code-fold: true
+mu_fixed <- log(2)
+p_fixed <- 0.3
+sigma_cure_vals <- c(0.3, 0.5, 0.8, 1.0, 1.5)
+
+t_grid5 <- seq(0.01, 5, length.out = 300)
+
+df_cs <- do.call(rbind, lapply(sigma_cure_vals, function(s) {
+  data.frame(
+    time = t_grid5,
+    survival = cure_S(t_grid5, mu_fixed, s, p_fixed),
+    sigma = paste0("sigma = ", s, " (alpha = ", round(1/s, 2), ")")
+  )
+}))
+
+g2(df_cs, survival ~ time, color = "sigma",
+   title = "Cure Weibull: varying shape (mu=log(2), cure=30%)") |>
+  mark_line() |>
+  scale_x(domain = c(0, 5), nice = FALSE) |>
+  scale_y(domain = c(0, 1), nice = FALSE) |>
+  axis_x(title = "Time (years)") |>
+  axis_y(title = "S(t)")
+```
+
+- Small $\sigma$: sharp early decline, then quick approach to the 30% plateau
+- Large $\sigma$: gradual decline, slow approach to the plateau
+
+All curves converge to $S(\infty) = 0.30$.
+
+---
+
+## Summary
+
+| Feature | What it controls | Key insight |
+|---------|-----------------|-------------|
+| $\mu$ (location) | Shifts survival curve in time | Higher $\mu$ = longer expected survival |
+| $\sigma$ (scale) | Shape of hazard: increasing, constant, decreasing | $\sigma < 1$: wear-out; $\sigma > 1$: early risk |
+| $\theta_1$ (coupling) | Non-proportional hazards | One parameter breaks PH assumption |
+| $p$ (cure rate) | Long-run survival plateau | $S(\infty) = p$ for cured fraction |
+
+The `vldaft` package implements all of these in a unified framework with C and Rust backends, `gamlss2` integration, and support for right/left/interval censoring and left truncation.
+
+---
+
+## References
+
+- Anderson, K. M. (1991). A nonproportional hazards Weibull accelerated
+  failure time regression model. *Biometrics*, **47**(1), 281–288.
+- Rodrigues, J., Cancho, V. G., de Castro, M. & Louzada-Neto, F.
+  (2009). On the unification of long-term survival models.
+  *Statistics & Probability Letters*, **79**(6), 753–759.
+- Package source: [github.com/keaven/vldaft](https://github.com/keaven/vldaft)
